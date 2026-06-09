@@ -115,7 +115,7 @@ of attaching a W3C trace context to a SQL workload. See
       <td><a href="#mode-2a">2a</a></td>
       <td><code>SET LOCAL ...; &lt;SQL&gt;;</code> as multi-statement simple <code>Q</code></td>
       <td>1</td>
-      <td><b>misses</b> (simple protocol)</td>
+      <td><b>misses</b> (simple protocol)⁶</td>
       <td>2.5 ms</td><td><b>~0 %</b>⁵</td>
       <td>30.5 ms</td><td><b>+1 %</b></td>
     </tr>
@@ -172,6 +172,24 @@ that simple `Q` (Mode 2a) sends marginally fewer bytes than
 extended-protocol `Bind`+`Execute`+`Sync` (Mode 0) even after the
 SET LOCAL prefix.
 
+⁶ Mode 2a forces the **simple query protocol** and so structurally
+breaks two extended-protocol features the bench relies on elsewhere:
+
+  * **No prepared statements.** Neither pgx's automatic statement
+    cache nor explicit `PREPARE`/`EXECUTE` is reachable — both live on
+    the v3 extended-protocol Parse/Bind/Execute path. Every iteration
+    pays a fresh server-side parse + plan regardless of how stable
+    the SQL text is.
+  * **No parameter binding.** Every literal in the SQL (the `id`
+    lookup value, the traceparent string itself) is client-interpolated
+    into the text. Escape correctness becomes an application
+    responsibility instead of a protocol guarantee; mis-escaped values
+    become a SQL-injection vector.
+
+The headline `time` / `%` numbers don't surface these costs — they're
+visible in the per-mode prose and in `pg_stat_statements` (Mode 2a's
+delta of 1 distinct row vs Mode 4's 0).
+
 Mode 4 requires a patched pgx (see [pgx_patches](#pgx_patches)) and a
 patched postgres ([PR #3](https://github.com/ringerc/postgres/pull/3)).
 
@@ -209,10 +227,15 @@ otelbench check
 - An OTLP collector for client-side spans (Jaeger / Tempo / Grafana
   Agent).
 
-**Planned (not yet implemented):** a `docker-compose.yml` that wires up
-patched postgres + contrib/otel + toxiproxy + an OTLP collector + Jaeger
-will live under `deploy/`. Today the bench is run against locally-started
-processes; see the [Running](#running) section.
+A [`deploy/`](deploy/) directory ships a `docker-compose.yml` that
+brings up patched postgres (with `contrib/otel` +
+`contrib/otel_postgres_tracing` + the
+[`postgres_otel_tracing_demo`](https://github.com/ringerc/postgres_otel_tracing_demo)
+Rust extension loaded), toxiproxy, an OTel collector, and Jaeger.
+First-time build is slow (~15–20 min for the patched-postgres image)
+but only happens once. See [`deploy/README.md`](deploy/README.md) for
+the bring-up commands. The compose stack is **not yet end-to-end
+verified by the author** — file an issue if pieces are broken.
 
 ## Modes — protocol-level rationale
 
@@ -585,10 +608,18 @@ go build ./cmd/otelbench
 ./otelbench bench --modes 1a --iterations 1000 --latency intradc
 ```
 
-Docker compose: **not yet implemented.** A planned `deploy/docker-compose.yml`
-will wire up patched postgres + contrib/otel + toxiproxy + an OTLP
-collector + Jaeger so the published demo runs in one `docker compose up`.
-Tracked as a future task; for now, start each piece by hand.
+Docker compose: see [`deploy/`](deploy/). One-line bring-up:
+
+```
+cd deploy && docker compose up --build
+```
+
+This builds patched postgres + the Rust demo extension + the toxiproxy
++ otel-collector + Jaeger stack. After `up`, the bench's default DSN
+(`postgres://postgres@127.0.0.1:5645/postgres?sslmode=disable`) and
+its default `--otlp-endpoint=localhost:4317` both Just Work. Jaeger UI
+at <http://localhost:16686>. Not yet end-to-end verified by the
+author.
 
 ## License
 

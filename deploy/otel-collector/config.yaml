@@ -1,0 +1,50 @@
+# otel-collector-contrib config for the bench published-demo stack.
+#
+# Two sources feed into us:
+#
+#   1. postgres_otel_tracing_demo (the Rust extension loaded in postgres)
+#      ships server-side spans via OTLP/gRPC to this collector.
+#   2. otelbench (running on the host) ships client-side iteration +
+#      pgx-per-query spans via OTLP/gRPC, also to this collector.
+#
+# We batch and forward everything to the jaeger all-in-one over OTLP.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch:
+    # Default timing is fine for the bench's spans-per-second rate.
+    # Tune timeout down if a demo seems "laggy" arriving in Jaeger.
+    timeout: 1s
+    send_batch_size: 512
+
+exporters:
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # Always-on debug exporter; helpful when wiring up the stack for the
+  # first time. Comment out for steady-state demos to keep the
+  # container's stdout tidy.
+  debug:
+    verbosity: basic
+    sampling_initial: 5
+    sampling_thereafter: 100
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlp/jaeger, debug]
+
+  telemetry:
+    logs:
+      level: info

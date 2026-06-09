@@ -1,0 +1,113 @@
+# docker-compose for the postgres_otel_tracing_bench published demo.
+#
+# Brings up:
+#
+#   - postgres (patched, with contrib/otel + contrib/otel_postgres_tracing
+#               + postgres_otel_tracing_demo loaded, pg_stat_statements
+#               available). Built from source via deploy/postgres/Dockerfile.
+#   - toxiproxy in front of postgres so the bench can inject latency.
+#   - otel-collector receiving OTLP/gRPC from postgres (via the demo
+#               extension's exporter) and from the otelbench harness;
+#               forwarding to jaeger.
+#   - jaeger all-in-one with the OTLP receiver enabled, UI on :16686.
+#
+# The benchmark harness (`otelbench`) is intentionally NOT a service in
+# this compose --- it runs from the host so iteration on bench code
+# doesn't require image rebuilds. The host hits:
+#
+#   postgres via toxiproxy on  localhost:5645  (mapped from toxiproxy:5645)
+#   toxiproxy control plane on localhost:8474  (mapped from toxiproxy:8474)
+#   otel-collector OTLP gRPC   localhost:4317  (mapped from otel-collector:4317)
+#   jaeger UI                  localhost:16686 (mapped from jaeger:16686)
+#
+# Usage:
+#   cd deploy
+#   docker compose up --build       # first-time: builds the postgres image
+#   docker compose up -d            # subsequent: starts existing images
+#   docker compose logs -f postgres # tail postgres logs
+#   docker compose down -v          # tear down + drop volumes
+
+services:
+
+  postgres:
+    build:
+      context: ./postgres
+      # Pinning the build-args at one place so a rebuild is a one-line edit.
+      args:
+        POSTGRES_REPO: https://github.com/ringerc/postgres.git
+        POSTGRES_BRANCH: postgres-otel-tracing
+        DEMO_REPO: https://github.com/ringerc/postgres_otel_tracing_demo.git
+        DEMO_BRANCH: main
+    image: postgres-otel-bench:dev
+    environment:
+      # The demo extension ships spans via opentelemetry-rust's OTLP gRPC
+      # exporter. Standard OTel env vars pick this up at extension load.
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
+      OTEL_EXPORTER_OTLP_PROTOCOL: grpc
+      OTEL_TRACES_EXPORTER: otlp
+      OTEL_SERVICE_NAME: postgres
+      OTEL_RESOURCE_ATTRIBUTES: deployment.environment=bench
+      # postgres expects PGDATA in env when run via the image entrypoint.
+      PGDATA: /var/lib/postgresql/data
+      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_USER: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    # Internal-only: clients reach postgres via the toxiproxy hop so the
+    # bench can apply latency presets. Exposing 5432 directly would let
+    # callers bypass that and confuse the published demo numbers.
+    expose:
+      - "5432"
+    depends_on:
+      otel-collector:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  toxiproxy:
+    image: ghcr.io/shopify/toxiproxy:2.12.0
+    # The bench creates / removes / updates toxics via the control-plane
+    # HTTP API at 8474. We pre-seed the "postgres" proxy via the JSON
+    # config so the bench finds it on startup; without this the user
+    # would have to do a manual `toxiproxy-cli create` after bring-up.
+    command:
+      - "-host=0.0.0.0"
+      - "-config=/etc/toxiproxy/toxiproxy.json"
+    volumes:
+      - ./toxiproxy.json:/etc/toxiproxy/toxiproxy.json:ro
+    ports:
+      - "5645:5645"   # postgres-via-toxiproxy listener (bench DSN points here)
+      - "8474:8474"   # toxiproxy control-plane HTTP API
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.114.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"   # OTLP/gRPC from bench harness on the host
+      - "4318:4318"   # OTLP/HTTP (unused today, exposed for ad-hoc tools)
+    depends_on:
+      jaeger:
+        condition: service_started
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      # 1.35+ supports OTLP natively via this flag; the collector hands
+      # off here.
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"   # UI
+      # Internal-only ports (collector reaches them by service name):
+      #   4317 (OTLP gRPC) -- conflict with otel-collector's 4317 if we
+      #   exposed it, so we don't.
+
+volumes:
+  postgres-data:
