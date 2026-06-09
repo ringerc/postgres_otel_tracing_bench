@@ -35,9 +35,15 @@ Brings up the four services the bench needs in one network:
 
 **Not yet verified end-to-end.** The config files in this directory
 are written but the postgres image hasn't been built or run by the
-author. First-time `docker compose up --build` is expected to take
-15–20 minutes (postgres-from-source ≈ 5 min, Rust extension build ≈
-5 min, base apt setup the rest). Report bugs.
+author. The repo's devcontainer can't host the docker daemon (the
+docker-in-docker feature needs a privileged container, which isn't
+available), so verification has to happen on a host with docker
+available — a workstation, a CI runner, or a non-restricted dev
+environment.
+
+First-time `docker compose up --build` is expected to take 15–20
+minutes (postgres-from-source ≈ 5 min, Rust extension build ≈ 5 min,
+base apt setup the rest). Report bugs.
 
 ## Bring it up
 
