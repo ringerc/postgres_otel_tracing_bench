@@ -10,6 +10,14 @@ trace context to each query through every supported propagation channel
 that contrib/otel picks the context up, emits server-side spans, and
 links them under the same `trace_id` as the client-side spans.
 
+To make the protocol-shape delta visible at human-readable percentile
+numbers rather than µs-level loopback noise, the harness injects
+**simulated network latency** between client and postgres via
+[toxiproxy](https://github.com/Shopify/toxiproxy). One-line presets
+(`--latency intradc|crossaz|crossregion|intercontinental`) attach
+symmetric upstream + downstream toxics so a per-iteration RTT in the
+1 ms – 100 ms range is what the benchmark is actually measuring against.
+
 [otel-ext]: https://github.com/ringerc/postgres/tree/postgres-otel-tracing/contrib/otel
 
 ### Related work
