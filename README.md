@@ -324,6 +324,26 @@ The wire-level wins above are only half the story. The other half is
   XACT_COMMIT WAL record, no implicit-vs-explicit transaction
   ambiguity to reason about.
 
+**Adoption cost (the catch).** This mode requires both ends of the
+connection to support the feature:
+
+- **Driver support.** Every client driver an application uses
+  (pgx, libpq, psycopg, JDBC, npgsql, …) has to add support for
+  emitting the `'M'` frame and negotiating `_pq_.headers=1` at
+  startup. This repo carries one such driver patch
+  ([ringerc/pgx_patches][pgxp]); the rest do not exist yet.
+- **A new enough postgres.** The `'M'` message is server-side
+  new in [PR #3][pr3]; even after that lands, every postgres
+  the application talks to needs to be at the version that
+  shipped it. Older postgres versions, managed services on older
+  release lines, and connection-pooling proxies all have to
+  pass-through or implement the feature.
+
+Until both sides ship, real applications will keep using the
+existing modes (1a–3) for backwards compatibility. Mode 4 is the
+target end state, not a today-ready replacement; the benchmark
+quantifies what's left on the table by not having it yet.
+
 ## Latency injection
 
 [toxiproxy](https://github.com/Shopify/toxiproxy) is the only mechanism
