@@ -384,16 +384,30 @@ The wire-level wins above are only half the story. The other half is
 **Adoption cost (the catch).** This mode requires both ends of the
 connection to support the feature:
 
-- **Driver support.** Every client driver an application uses
-  (pgx, libpq, psycopg, JDBC, npgsql, …) has to add support for
-  emitting the `'M'` frame and negotiating `_pq_.headers=1` at
-  startup. Two such driver patches exist today: the [libpq
-  patch][pr3] in [PR #3][pr3] (which `psql`, psycopg via libpq,
-  and many other libpq-backed drivers consume transitively) and
-  the [ringerc/pgx_patches][pgxp] branch this repo links against
-  for Mode 4. Other drivers (JDBC, npgsql, asyncpg, psycopg's
-  native-Python path, …) still need their own patches before
-  the wire feature is reachable from their language.
+- **Driver support, in two parts:**
+
+  1. **Wire-level support.** Every client driver an application
+     uses (pgx, libpq, psycopg, JDBC, npgsql, asyncpg, …) has to be
+     able to emit the `'M'` frame and negotiate `_pq_.headers=1` at
+     startup. Two such patches exist today: the [libpq patch][pr3]
+     in [PR #3][pr3] (which `psql`, psycopg-via-libpq, and other
+     libpq-backed drivers get transitively when they link against
+     a new-enough libpq) and the [ringerc/pgx_patches][pgxp] branch
+     this repo links against. Other native drivers (JDBC, npgsql,
+     asyncpg, psycopg's native-Python path, …) need their own
+     wire-level work.
+  2. **Public API surface in each driver.** Wire support is
+     necessary but not sufficient. Even a libpq-backed driver that
+     gets the wire feature "for free" still has to expose it to
+     **its own users** — a method on the connection / cursor /
+     batch object to attach trace context to the next operation,
+     or (ideally) an OTel-aware wrapper that picks up the current
+     span and injects automatically. Without that surface, Python /
+     Ruby / C / etc. application code has no way to actually
+     populate the `'M'` frame even when libpq underneath could
+     send it. Same applies to JDBC, npgsql, and any other driver
+     whose API doesn't yet model out-of-band per-operation
+     metadata.
 - **A new enough postgres.** The `'M'` message is server-side
   new in [PR #3][pr3]; even after that lands, every postgres
   the application talks to needs to be at the version that
