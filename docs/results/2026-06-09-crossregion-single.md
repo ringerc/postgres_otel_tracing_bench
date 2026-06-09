@@ -1,5 +1,18 @@
 # Benchmark result — trace-context propagation, single SELECT, crossregion
 
+> [!NOTE]
+> **Captured before the `otel` → `otel_api` extension rename.**
+> SQL snippets, GUC names, and the postgres branch references in
+> this doc are from before that work (`postgres_otel_api@4ca911d` +
+> consumers, 2026-06-10). The propagation logic, wire shapes, RTT
+> counts, and timing measurements are unchanged by the rename —
+> `SET LOCAL otel.traceparent` simply became
+> `SET LOCAL otel_api.traceparent`; the underlying server behaviour,
+> pgx statement-cache interaction, and `'M'`-frame wire format are
+> all identical. So the numbers stand; only the cut-and-paste SQL
+> in the [Reproducing](#reproducing) section needs updating if you
+> re-run today.
+
 **Date:** 2026-06-09
 **Run by:** `otelbench bench` (commit `c05202b`)
 **pgx:** `ringerc/pgx_patches` branch `m-protocol-headers` (atop `v5.10.0`)
