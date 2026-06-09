@@ -296,6 +296,28 @@ sequenceDiagram
 **1 RTT**, cache-friendly, no wrapping transaction — the only path that
 achieves all three.
 
+The wire-level wins above are only half the story. The other half is
+**how the trace context gets into the query path**:
+
+- **Auto-instrumentation friendly.** The `M` frame is an out-of-band
+  metadata channel — it doesn't touch the SQL text, the parameter
+  list, or the call shape. A driver-level shim or middleware (e.g.
+  `otelpgx` registered as `ConnConfig.Tracer`, a `database/sql`
+  wrapper, an APM agent) can inject `M` before every Query/Exec
+  transparently, without the application code knowing or being
+  modified. Compare with Mode 2b (rewriting every call site into a
+  4-step batch) or Mode 3 (mutating every SQL string) — neither can
+  be added by middleware without restructuring caller-visible
+  semantics.
+- **Statement-cache and prepared-statement preserving.** Because the
+  trace context lives in a separate wire frame instead of in the
+  SQL, pgx's automatic statement cache and any application use of
+  explicit prepared statements continue to work unchanged. No
+  jackc/pgx#1935 problem.
+- **No transaction-machinery overhead.** No BEGIN/COMMIT, no
+  XACT_COMMIT WAL record, no implicit-vs-explicit transaction
+  ambiguity to reason about.
+
 ## Latency injection
 
 [toxiproxy](https://github.com/Shopify/toxiproxy) is the only mechanism
