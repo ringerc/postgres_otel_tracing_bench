@@ -1,4 +1,6 @@
-# postgres_otel_tracing_bench
+# PostgreSQL OpenTelemetry trace context propagation evaluation tool
+
+(Repository: `postgres_otel_tracing_bench`.)
 
 > [!NOTE]
 > This test tool was prepared with significant LLM assistance. Review
@@ -66,14 +68,28 @@ of attaching a W3C trace context to a SQL workload. See
 `crossregion` (~30 ms RTT) is in
 [`2026-06-09-crossregion-single.md`](docs/results/2026-06-09-crossregion-single.md).
 
-| Mode | Wire shape | RTTs | Statement cache |
-|------|------------|------|-----------------|
-| [1a](#mode-1a) | `BEGIN; SET LOCAL otel.traceparent=...; <SQL>; COMMIT;` (sequential) | 4 | hits |
-| [1b](#mode-1b) | `SET ...; <SQL>; RESET ...;` (sequential) | 3 | hits |
-| [2a](#mode-2a) | `SET LOCAL ...; <SQL>;` as a multi-statement simple `Q` | 1 | **misses** (simple protocol) |
-| [2b](#mode-2b) | `pgx.Batch` with `BEGIN/SET LOCAL/<SQL>/COMMIT` under one Sync | 1 | hits |
-| [3](#mode-3)  | sqlcommenter SQL-comment prepend | 1 | **misses every iteration** (SQL text changes) |
-| [4](#mode-4)  | `M` (RequestHeaders) frontend message | 1 | hits |
+| Mode | Wire shape | RTTs | Statement cache | intra-AZ (~2 ms RTT) p50, % over untraced | WAN (~30 ms RTT) p50, % over untraced |
+|------|------------|------|-----------------|---|---|
+| [1a](#mode-1a) | `BEGIN; SET LOCAL ...; <SQL>; COMMIT;` (sequential) | 4 | hits | 10.4 ms, **+420 %** | 121 ms, **+300 %** |
+| [1b](#mode-1b) | `SET ...; <SQL>; RESET ...;` (sequential) | 3 | hits | 7.9 ms, **+295 %** | 91 ms, **+200 %** |
+| [2a](#mode-2a) | `SET LOCAL ...; <SQL>;` as multi-statement simple `Q` | 1 | **misses** (simple protocol) | 2.7 ms, **+35 %** | 30.5 ms, **+2 %** |
+| [2b](#mode-2b) | `pgx.Batch` with `BEGIN/SET LOCAL/<SQL>/COMMIT` under one Sync | 1 advertised, **2 measured**¹ | hits | 5.4 ms, **+170 %** | 61 ms, **+100 %** |
+| [3](#mode-3)  | sqlcommenter SQL-comment prepend | 1 advertised, **2 measured**¹ | **misses every iteration** (SQL text changes) | 5.5 ms, **+175 %** | 61 ms, **+100 %** |
+| [4](#mode-4)  | `M` (RequestHeaders) frontend message | 1 | hits | ~2 ms, **~0 %** | 30.1 ms, **+0.3 %** |
+
+¹ Modes 2b and 3 would be 1 RTT if the SET LOCAL value (2b) / SQL
+comment (3) didn't vary every iteration — but they do, so pgx's
+automatic statement cache misses every call and pays an extra `Parse`
+round trip. See the per-mode diagrams.
+
+**Untraced baseline** for the % overhead column = the same parameterized
+SELECT issued via extended protocol with a cache-hit (`Bind` + `Execute`
++ `Sync`), ≈ 1 × RTT. So the intra-AZ baseline is ~2 ms and the WAN
+baseline is ~30 ms. WAN numbers are direct measurements from
+[`docs/results/2026-06-09-crossregion-single.md`](docs/results/2026-06-09-crossregion-single.md);
+intra-AZ numbers are from a separate run at the `intradc` preset (~2 ms
+RTT) and from extrapolation for Mode 4 (which the canned dataset only
+captured at `crossregion`).
 
 Mode 4 requires a patched pgx (see [pgx_patches](#pgx_patches)) and a
 patched postgres ([PR #3](https://github.com/ringerc/postgres/pull/3)).
