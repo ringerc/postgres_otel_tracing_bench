@@ -110,37 +110,140 @@ processes; see the [Running](#running) section.
 ## Modes — protocol-level rationale
 
 See [`internal/modes/*.go`](internal/modes/) for the per-mode wire-shape
-notes. Highlights:
+notes. Each mode's per-iteration message sequence in cache-warm steady
+state:
 
-**Mode 1a** is the "explicit-transaction SET LOCAL" pattern: four
-sequential round-trips, statement cache works for the workload SQL. The
-fairest baseline for "what you get if you wrap each instrumented query
-in an explicit transaction."
+### Mode 1a: `BEGIN`; `SET LOCAL`; SQL; `COMMIT` (sequential)
 
-**Mode 1b** uses session-level `SET` plus `RESET`, three sequential
-round-trips. Models the naive instrumentation pattern that doesn't care
-whether the caller is in a transaction. Leaks the session GUC if the
-RESET is skipped.
+The "explicit-transaction SET LOCAL" pattern. Statement cache hits on
+the workload SQL (constant text, parameter binding); BEGIN / SET LOCAL /
+COMMIT go via the simple-Q path because they have no parameters.
 
-**Mode 2a** packs `SET LOCAL ...; <SQL>;` into one simple `Q` —
-postgres treats it as a single implicit transaction. One RTT, but no
-parameter binding and no statement cache; every iteration pays a fresh
-Parse + plan.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as Postgres
+    C->>S: Q "BEGIN"
+    S-->>C: CommandComplete, ReadyForQuery
+    C->>S: Q "SET LOCAL otel.traceparent='...'"
+    S-->>C: CommandComplete, ReadyForQuery
+    C->>S: Bind+Execute+Sync (cached SQL, $1=id)
+    S-->>C: BindComplete, rows, CommandComplete, ReadyForQuery
+    C->>S: Q "COMMIT"
+    S-->>C: CommandComplete, ReadyForQuery
+```
 
-**Mode 2b** uses `pgx.Batch` (`SendBatch`) to coalesce `BEGIN`,
-`SET LOCAL`, `<SQL>`, `COMMIT` into one round trip with a single
-trailing Sync. Statement cache hits on the workload SQL. Pays the
-wrapping-transaction overhead (XACT_COMMIT WAL record, transaction
-setup/teardown) on every iteration.
+**4 RTT.** Fairest baseline for "what you get if you wrap each
+instrumented query in an explicit transaction."
 
-**Mode 3** prepends a sqlcommenter `/*key='val',...*/` comment. One RTT,
-but pgx's statement cache keys on SQL text → cache miss every iteration
-→ `pg_stat_statements` blows up linearly. `otelbench demo
-sqlcommenter-pool-break` is the standalone pathology demo.
+### Mode 1b: `SET`; SQL; `RESET` (sequential, no wrapping txn)
 
-**Mode 4** sends an `M` (RequestHeaders) frame just before the next
-`P`/`B`/`E`. One RTT, statement cache hits, no wrapping transaction. The
-fairest single-RTT comparison against modes 2b and 3.
+Session-level `SET` plus `RESET`. Models the naive instrumentation
+pattern that doesn't care whether the caller is in a transaction. Leaks
+the session GUC if RESET is skipped.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as Postgres
+    C->>S: Q "SET otel.traceparent='...'"
+    S-->>C: CommandComplete, ReadyForQuery
+    C->>S: Bind+Execute+Sync (cached SQL, $1=id)
+    S-->>C: BindComplete, rows, CommandComplete, ReadyForQuery
+    C->>S: Q "RESET otel.traceparent"
+    S-->>C: CommandComplete, ReadyForQuery
+```
+
+**3 RTT.**
+
+### Mode 2a: multi-statement simple `Q`
+
+Packs `SET LOCAL ...; <SQL>;` into a single `Q` frame. Postgres treats
+multi-statement simple Qs as one implicit transaction, so SET LOCAL
+applies to the SQL that follows. Pays no protocol-level overhead per
+extra statement, but forces simple protocol → no parameter binding, no
+statement cache, fresh server-side parse + plan every iteration.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as Postgres
+    C->>S: Q "SET LOCAL otel.traceparent='...'; SELECT ... WHERE id=N"
+    Note over S: one implicit transaction; literals client-interpolated
+    S-->>C: CommandComplete (SET), rows, CommandComplete (SELECT), ReadyForQuery
+```
+
+**1 RTT.** Cheapest on RTT, most expensive on server-side parse work.
+
+### Mode 2b: `pgx.Batch` pipelined under one Sync
+
+`pgx.SendBatch` queues `BEGIN` / `SET LOCAL` / `<SQL>` / `COMMIT` and
+flushes with one trailing Sync. In principle one round trip; in practice
+the SET LOCAL value differs every iteration, so pgx's automatic statement
+cache misses on it and issues a separate `Parse` round trip first.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as Postgres
+    Note over C: SET LOCAL text varies every iter → cache miss → extra Parse RTT
+    C->>S: Parse "SET LOCAL otel.traceparent='...'" + Sync
+    S-->>C: ParseComplete, ReadyForQuery
+    Note over C: pgx.Batch flush
+    C->>S: B+E (BEGIN), B+E (SET LOCAL), B+E (cached SQL), B+E (COMMIT), Sync
+    S-->>C: ..., rows, ..., ReadyForQuery
+```
+
+**2 RTT** in steady state. Workload SQL hits the cache; SET LOCAL doesn't,
+and the wrapping transaction adds an XACT_COMMIT WAL record each iter.
+
+### Mode 3: sqlcommenter SQL-comment prepend
+
+Prepends `/*traceparent='...',tracestate='...'*/` to the workload SQL.
+One round trip on the surface, but pgx's statement cache keys on full
+SQL text — with the trace_id in the comment changing every iteration,
+the cache misses every time, forcing an extra `Parse` RTT.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as Postgres
+    Note over C: workload SQL text changes every iter → cache miss → extra Parse RTT
+    C->>S: Parse "/*traceparent='...'*/ SELECT ... WHERE id=$1" + Sync
+    S-->>C: ParseComplete, ReadyForQuery
+    C->>S: Bind+Execute+Sync ($1=id)
+    S-->>C: BindComplete, rows, CommandComplete, ReadyForQuery
+```
+
+**2 RTT**, every iteration. `pg_prepared_statements` grows up to pgx's
+LRU cap; the `otelbench demo sqlcommenter-pool-break` subcommand is the
+standalone pathology demo.
+
+### Mode 4: `M` (RequestHeaders) frame + workload SQL
+
+The patched-pgx path. An `M` frame carrying the trace context is queued
+on the same Frontend buffer as the next Bind/Execute. The server's
+deferred-apply dispatcher attaches the headers to the next P/B/E
+boundary, which is the workload SQL we just queued.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as Postgres
+    Note over C: M frame queued ahead of Bind/Execute
+    C->>S: M {otel.traceparent='...'}, Bind+Execute (cached SQL, $1=id), Sync
+    Note over S: ApplyPendingRequestHeaders at next op boundary
+    S-->>C: BindComplete, rows, CommandComplete, ReadyForQuery
+```
+
+**1 RTT**, cache-friendly, no wrapping transaction — the only path that
+achieves all three.
 
 ## Latency injection
 
