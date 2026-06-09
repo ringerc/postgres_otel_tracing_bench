@@ -3,13 +3,16 @@
 //
 // The toxic configuration is symmetric: we apply latency toxics to both
 // the upstream and downstream legs of the proxy so total RTT = 2 ×
-// one-way delay. Both legs use --latency-jitter as a percentage of the
-// one-way delay so jitter scales with RTT.
+// one-way delay. Toxiproxy speaks integer milliseconds, so very small
+// presets (intradc) round to the millisecond floor.
 package latency
 
 import (
 	"errors"
+	"fmt"
 	"time"
+
+	toxiproxy "github.com/Shopify/toxiproxy/v2/client"
 )
 
 // Preset is the named latency profile applied to the toxiproxy proxy.
@@ -28,51 +31,101 @@ var AllPresets = []Preset{
 	PresetNone, PresetIntraDC, PresetCrossAZ, PresetCrossRegion, PresetIntercontinental,
 }
 
-// Profile is the (one-way delay, jitter fraction) parameter pair for a
-// preset. RTT = 2 × OneWay (jitter applied symmetrically).
+// Profile is the (one-way delay, jitter) parameter pair for a preset.
+// RTT = 2 × OneWay (jitter applied symmetrically). Stored as
+// time.Duration; toxiproxy itself takes integer milliseconds.
 type Profile struct {
-	OneWay         time.Duration
-	JitterFraction float64 // 0.1 = ±10%
+	OneWay time.Duration
+	Jitter time.Duration // peak deviation, applied to each leg
 }
 
-// Profiles maps each preset to its delay parameters.
+// Profiles maps each preset to its delay parameters. Values are rounded
+// to the millisecond floor when handed to toxiproxy, so PresetIntraDC's
+// 1ms target ends up as 1ms ± 0 (toxiproxy can't express sub-ms).
 var Profiles = map[Preset]Profile{
 	PresetNone:             {0, 0},
-	PresetIntraDC:          {500 * time.Microsecond, 0.10},
-	PresetCrossAZ:          {2500 * time.Microsecond, 0.10},
-	PresetCrossRegion:      {15 * time.Millisecond, 0.10},
-	PresetIntercontinental: {50 * time.Millisecond, 0.10},
+	PresetIntraDC:          {1 * time.Millisecond, 0},
+	PresetCrossAZ:          {2 * time.Millisecond, 0},
+	PresetCrossRegion:      {15 * time.Millisecond, 1 * time.Millisecond},
+	PresetIntercontinental: {50 * time.Millisecond, 5 * time.Millisecond},
 }
+
+// IsValid reports whether p is a known preset.
+func (p Preset) IsValid() bool {
+	_, ok := Profiles[p]
+	return ok
+}
+
+const (
+	upstreamToxicName   = "otelbench_upstream_latency"
+	downstreamToxicName = "otelbench_downstream_latency"
+)
 
 // Client manages the toxics attached to a single named toxiproxy proxy.
-//
-// TODO: implement on top of github.com/Shopify/toxiproxy/v2/client.
-// Operations needed:
-//
-//	Apply(p Preset)   --- clears existing toxics, then adds upstream +
-//	                      downstream latency toxics matching Profile[p].
-//	Clear()           --- removes all toxics from the proxy.
-//	MeasureRTT(ctx)   --- opens one connection, runs SELECT 1 a few
-//	                      times, returns median RTT including
-//	                      toxiproxy's own per-hop overhead. Reported
-//	                      alongside results so the floor is visible.
 type Client struct {
-	apiURL    string
-	proxyName string
+	c     *toxiproxy.Client
+	proxy *toxiproxy.Proxy
+	name  string
 }
 
-func New(apiURL, proxyName string) *Client {
-	return &Client{apiURL: apiURL, proxyName: proxyName}
+// New constructs a Client and fetches the named proxy. Returns an error
+// if the proxy doesn't exist --- the docker-compose / dev setup is
+// responsible for creating it; the benchmark just attaches toxics to
+// an already-configured proxy.
+func New(apiURL, proxyName string) (*Client, error) {
+	c := toxiproxy.NewClient(apiURL)
+	p, err := c.Proxy(proxyName)
+	if err != nil {
+		return nil, fmt.Errorf("toxiproxy proxy %q: %w (is toxiproxy running at %s with the proxy configured?)",
+			proxyName, err, apiURL)
+	}
+	return &Client{c: c, proxy: p, name: proxyName}, nil
 }
 
+// Apply replaces any existing otelbench toxics with the pair matching p.
+// Idempotent --- safe to call repeatedly between cells in a sweep.
 func (c *Client) Apply(p Preset) error {
-	_ = c
-	if _, ok := Profiles[p]; !ok {
+	prof, ok := Profiles[p]
+	if !ok {
 		return errors.New("unknown latency preset: " + string(p))
 	}
-	return errors.New("latency.Client.Apply not yet implemented")
+	if err := c.Clear(); err != nil {
+		return err
+	}
+	if p == PresetNone {
+		return nil // no toxics for passthrough; reports the floor latency
+	}
+	latencyMs := int(prof.OneWay / time.Millisecond)
+	jitterMs := int(prof.Jitter / time.Millisecond)
+	if _, err := c.proxy.AddToxic(upstreamToxicName, "latency", "upstream", 1.0, toxiproxy.Attributes{
+		"latency": latencyMs,
+		"jitter":  jitterMs,
+	}); err != nil {
+		return fmt.Errorf("add upstream latency toxic: %w", err)
+	}
+	if _, err := c.proxy.AddToxic(downstreamToxicName, "latency", "downstream", 1.0, toxiproxy.Attributes{
+		"latency": latencyMs,
+		"jitter":  jitterMs,
+	}); err != nil {
+		return fmt.Errorf("add downstream latency toxic: %w", err)
+	}
+	return nil
 }
 
+// Clear removes any otelbench-managed toxics from the proxy. Toxics not
+// added by us (e.g. a manual debugging toxic the user added via the
+// toxiproxy CLI) are left in place.
 func (c *Client) Clear() error {
-	return errors.New("latency.Client.Clear not yet implemented")
+	toxics, err := c.proxy.Toxics()
+	if err != nil {
+		return fmt.Errorf("list toxics: %w", err)
+	}
+	for _, t := range toxics {
+		if t.Name == upstreamToxicName || t.Name == downstreamToxicName {
+			if err := c.proxy.RemoveToxic(t.Name); err != nil {
+				return fmt.Errorf("remove toxic %s: %w", t.Name, err)
+			}
+		}
+	}
+	return nil
 }

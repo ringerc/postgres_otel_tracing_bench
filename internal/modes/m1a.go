@@ -12,34 +12,30 @@ import (
 // mode1a --- "BEGIN; SET LOCAL otel.traceparent='...'; <SQL>; COMMIT;"
 // issued as four sequential round-trips, no pipelining.
 //
-// Wire shape per iteration (extended protocol, cache warm):
+// Wire shape per iteration (cache warm):
 //
-//	C: Query "BEGIN"             ->  S: CommandComplete, ReadyForQuery   (1 RTT)
-//	C: Bind (SET LOCAL), Execute, Sync  ->  S: ..., ReadyForQuery        (1 RTT)
-//	C: Bind (<SQL>),     Execute, Sync  ->  S: rows, ReadyForQuery       (1 RTT)
-//	C: Query "COMMIT"            ->  S: CommandComplete, ReadyForQuery   (1 RTT)
+//	C: BEGIN          ->  RFQ   (1 RTT)
+//	C: SET LOCAL ...  ->  RFQ   (1 RTT, NOT cache-friendly: traceparent
+//	                             literal is part of the SQL text)
+//	C: <SQL>          ->  rows  (1 RTT, cache hits after first iter)
+//	C: COMMIT         ->  RFQ   (1 RTT)
 //
-// Cache: the SQL and SET LOCAL prepared statements hit on the second
-// iteration onward; BEGIN/COMMIT go via simple Query (pgx's default for
-// internal transaction-control statements).
+// SET LOCAL semantics: scoped to the explicit transaction; visible to
+// the SQL statements that follow in the same transaction. Each batch
+// statement in a "batch" workload pays one round trip in this mode.
 //
-// SET LOCAL semantics: scoped to the explicit transaction, so the
-// traceparent set by `SET LOCAL` is visible to the SQL statement that
-// follows in the same transaction.
+// SET is a utility command --- postgres rejects parameter binding for
+// its value --- so the traceparent is interpolated into the SQL text.
+// Traceparent format ('NN-<hex>-<hex>-<hex>') contains no quote chars,
+// so literal-single-quoting is safe.
 type mode1a struct{}
 
 func (mode1a) ID() string { return "1a" }
 func (mode1a) Description() string {
-	return "BEGIN; SET LOCAL otel.traceparent=...; <SQL>; COMMIT;  (sequential, 4 RTT)"
+	return "BEGIN; SET LOCAL otel.traceparent=...; <SQL>; COMMIT;  (sequential, 3+N RTT for N-statement iteration)"
 }
 
 func (mode1a) Setup(ctx context.Context, conn *pgx.Conn, w workload.Workload) error {
-	// TODO: pre-prepare workload statements so first iteration also hits
-	// cache; for now rely on pgx's automatic cache to populate after
-	// the warmup pass.
-	_ = ctx
-	_ = conn
-	_ = w
 	return nil
 }
 
@@ -48,14 +44,14 @@ func (mode1a) RunOne(ctx context.Context, conn *pgx.Conn, w workload.Workload, t
 	if err != nil {
 		return 0, fmt.Errorf("BEGIN: %w", err)
 	}
-	defer func() { _ = tx.Rollback(ctx) }() // no-op if commit succeeded
+	defer func() { _ = tx.Rollback(ctx) }() // no-op if Commit succeeded
 
 	if _, err := tx.Exec(ctx,
-		"SET LOCAL otel.traceparent = $1", tc.Traceparent()); err != nil {
+		"SET LOCAL otel.traceparent = '"+tc.Traceparent()+"'"); err != nil {
 		return 0, fmt.Errorf("SET LOCAL: %w", err)
 	}
 
-	rows, err := w.RunSingle(ctx, tx)
+	rows, err := workload.ExecuteSequential(ctx, tx, w.NextStatements())
 	if err != nil {
 		return rows, fmt.Errorf("workload: %w", err)
 	}
@@ -66,8 +62,4 @@ func (mode1a) RunOne(ctx context.Context, conn *pgx.Conn, w workload.Workload, t
 	return rows, nil
 }
 
-func (mode1a) Teardown(ctx context.Context, conn *pgx.Conn) error {
-	_ = ctx
-	_ = conn
-	return nil
-}
+func (mode1a) Teardown(ctx context.Context, conn *pgx.Conn) error { return nil }

@@ -2,20 +2,22 @@ package workload
 
 import (
 	"context"
-	"errors"
+	"fmt"
+	"sync/atomic"
 
 	"github.com/jackc/pgx/v5"
 )
 
 // Batch is the multi-statement workload: N parameterized SELECTs sharing
-// one trace context. Models an ORM that fetches a parent row and then N-1
-// related-child rows in one logical operation.
+// one trace context per iteration. Models an ORM that fetches a parent
+// row and then N-1 related-child rows in one logical operation.
 //
-// Each mode in the batch suite (B1/B2/B3/B4) wraps Batch's queries with
-// its own propagation strategy --- e.g. B2 uses a single pgx.Batch with
-// BEGIN/SET LOCAL/<N queries>/COMMIT, B4 emits an M frame before each.
+// Setup reuses the bench_single table so we don't pay a second copy of
+// the seed data; "batch" just issues N SELECTs per iteration against
+// different ids.
 type Batch struct {
-	N int // statements per iteration
+	N      int
+	nextID atomic.Int64
 }
 
 func NewBatch(n int) *Batch { return &Batch{N: n} }
@@ -23,11 +25,8 @@ func NewBatch(n int) *Batch { return &Batch{N: n} }
 func (b *Batch) ID() string { return "batch" }
 
 func (b *Batch) Setup(ctx context.Context, conn *pgx.Conn) error {
-	// TODO: same seeded table as Single but with N×seed rows so a
-	// batch can issue N distinct id lookups.
-	_ = ctx
-	_ = conn
-	return errors.New("workload batch Setup not yet implemented")
+	// Reuse Single's seeded table.
+	return (&Single{}).Setup(ctx, conn)
 }
 
 func (b *Batch) Teardown(ctx context.Context, conn *pgx.Conn) error {
@@ -36,13 +35,22 @@ func (b *Batch) Teardown(ctx context.Context, conn *pgx.Conn) error {
 	return nil
 }
 
-func (b *Batch) RunSingle(ctx context.Context, q Querier) (int, error) {
-	// TODO: issue N SELECTs and return the row count. The mode owns
-	// pipelining choices --- this function should not assume a Batch
-	// is available; modes that want pipelining will provide a Querier
-	// shim that batches under the hood.
-	_ = ctx
-	_ = q
-	_ = b.N
-	return 0, errors.New("workload batch RunSingle not yet implemented")
+func (b *Batch) NextStatements() []Statement {
+	if b.N <= 0 {
+		// Defensive: a zero/negative N would silently produce no work
+		// and lie about iteration count.
+		return nil
+	}
+	out := make([]Statement, b.N)
+	base := b.nextID.Add(int64(b.N)) - int64(b.N)
+	for i := 0; i < b.N; i++ {
+		out[i] = Statement{
+			SQL:  SingleSQL,
+			Args: []any{(base + int64(i)) % SingleSeedRows},
+		}
+	}
+	return out
 }
+
+// Sanity for tests / callers: surface N in errors.
+func (b *Batch) String() string { return fmt.Sprintf("batch[N=%d]", b.N) }
