@@ -28,8 +28,12 @@ symmetric upstream + downstream toxics so a per-iteration RTT in the
 
 ### Related work
 
-This repo sits inside a four-PR series against `ringerc/postgres` plus a
-sibling demo extension that show the end-to-end picture:
+This harness builds on a `contrib/otel` postgres extension that ships
+the trace-context plumbing and extension API, plus a set of optional
+postgres and client-driver patches that unlock additional propagation
+channels (most importantly the `'M'` RequestHeaders frame for Mode 4).
+A sibling demo extension consumes contrib/otel's span-emit hook and
+ships spans to an OTel collector. The pieces:
 
 | Component | Where | What |
 |---|---|---|
