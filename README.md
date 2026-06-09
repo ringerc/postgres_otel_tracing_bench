@@ -218,6 +218,28 @@ sequenceDiagram
 **2 RTT** in steady state. Workload SQL hits the cache; SET LOCAL doesn't,
 and the wrapping transaction adds an XACT_COMMIT WAL record each iter.
 
+Beyond the wire shape, this mode has serious **adoption costs** that don't
+show up in the latency numbers:
+
+- **Intrusive application changes.** Every otherwise-standalone query
+  becomes a four-step `pgx.Batch` (BEGIN, SET LOCAL, the query, COMMIT)
+  that has to be assembled, sent, and result-walked manually. Existing
+  call sites that used `conn.Query` / `conn.QueryRow` / `db.SQL` helpers
+  all have to be rewritten.
+- **Harder result and error handling.** The `BatchResults` returned by
+  `SendBatch` has to be walked in queue order, one `.Exec()` / `.Query()`
+  call per queued item. Failures in any one item leave the connection
+  in an awkward state — the remaining results still need to be drained
+  (or the connection discarded) before reuse, and which item failed has
+  to be inferred from the index. Compare with `conn.Query`, which gives
+  you one error and one rowset directly.
+- **Not usable by auto-instrumentation or middleware.** A library that
+  wants to add trace propagation transparently — e.g. an `otelpgx`
+  equivalent, a `database/sql` driver wrapper, an APM agent — cannot
+  rewrite the caller's individual queries into batches without breaking
+  the caller's API. This pattern is only available to first-party
+  application code that is being modified specifically to support it.
+
 <a id="mode-3"></a>
 ### Mode 3: sqlcommenter SQL-comment prepend
 
