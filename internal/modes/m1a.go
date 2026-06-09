@@ -9,7 +9,7 @@ import (
 	"github.com/ringerc/postgres_otel_tracing_bench/internal/workload"
 )
 
-// mode1a --- "BEGIN; SET LOCAL otel.traceparent='...'; <SQL>; COMMIT;"
+// mode1a --- "BEGIN; SET LOCAL otel_api.traceparent='...'; <SQL>; COMMIT;"
 // issued as four sequential round-trips, no pipelining.
 //
 // Wire shape per iteration (cache warm):
@@ -32,7 +32,7 @@ type mode1a struct{}
 
 func (mode1a) ID() string { return "1a" }
 func (mode1a) Description() string {
-	return "BEGIN; SET LOCAL otel.traceparent=...; <SQL>; COMMIT;  (sequential, 3+N RTT for N-statement iteration)"
+	return "BEGIN; SET LOCAL otel_api.traceparent=...; <SQL>; COMMIT;  (sequential, 3+N RTT for N-statement iteration)"
 }
 
 func (mode1a) Setup(ctx context.Context, conn *pgx.Conn, w workload.Workload) error {
@@ -47,7 +47,7 @@ func (mode1a) RunOne(ctx context.Context, conn *pgx.Conn, w workload.Workload, t
 	defer func() { _ = tx.Rollback(ctx) }() // no-op if Commit succeeded
 
 	if _, err := tx.Exec(ctx,
-		"SET LOCAL otel.traceparent = '"+tc.Traceparent()+"'"); err != nil {
+		"SET LOCAL otel_api.traceparent = '"+tc.Traceparent()+"'"); err != nil {
 		return 0, fmt.Errorf("SET LOCAL: %w", err)
 	}
 

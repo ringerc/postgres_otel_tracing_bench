@@ -22,7 +22,7 @@ import (
 // Wire shape per iteration (cache warm, N workload statements):
 //
 //	Bind+Execute (BEGIN)
-//	Bind+Execute (SET LOCAL otel.traceparent='...')   <-- traceparent
+//	Bind+Execute (SET LOCAL otel_api.traceparent='...')   <-- traceparent
 //	                                                       inlined, never
 //	                                                       cache-hits
 //	Bind+Execute (<workload stmt 1>)                  <-- caches & hits
@@ -46,7 +46,7 @@ func (mode2b) RunOne(ctx context.Context, conn *pgx.Conn, w workload.Workload, t
 
 	b := &pgx.Batch{}
 	b.Queue("BEGIN")
-	b.Queue("SET LOCAL otel.traceparent = '" + tc.Traceparent() + "'")
+	b.Queue("SET LOCAL otel_api.traceparent = '" + tc.Traceparent() + "'")
 	for _, s := range stmts {
 		b.Queue(s.SQL, s.Args...)
 	}

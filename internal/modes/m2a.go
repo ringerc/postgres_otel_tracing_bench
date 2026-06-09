@@ -13,7 +13,7 @@ import (
 
 // mode2a --- multi-statement simple Query:
 //
-//	"SET LOCAL otel.traceparent='...'; <SQL1>; <SQL2>; ...;"
+//	"SET LOCAL otel_api.traceparent='...'; <SQL1>; <SQL2>; ...;"
 //
 // sent as a single 'Q' message via pgconn.Exec. Postgres treats a multi-
 // statement simple Q as one implicit transaction, so SET LOCAL works.
@@ -39,7 +39,7 @@ func (mode2a) RunOne(ctx context.Context, conn *pgx.Conn, w workload.Workload, t
 	}
 
 	var sb strings.Builder
-	sb.WriteString("SET LOCAL otel.traceparent = '")
+	sb.WriteString("SET LOCAL otel_api.traceparent = '")
 	sb.WriteString(tc.Traceparent())
 	sb.WriteString("';")
 	for _, s := range stmts {

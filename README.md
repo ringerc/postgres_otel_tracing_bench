@@ -422,7 +422,7 @@ sequenceDiagram
     S-->>C: CommandComplete, ReadyForQuery
     end
     rect rgb(255,220,220)
-    C->>S: Q "SET LOCAL otel.traceparent='...'"
+    C->>S: Q "SET LOCAL otel_api.traceparent='...'"
     S-->>C: CommandComplete, ReadyForQuery
     end
     rect rgb(220,255,220)
@@ -453,7 +453,7 @@ sequenceDiagram
     participant C as Client
     participant S as Postgres
     rect rgb(255,220,220)
-    C->>S: Q "SET otel.traceparent='...'"
+    C->>S: Q "SET otel_api.traceparent='...'"
     S-->>C: CommandComplete, ReadyForQuery
     end
     rect rgb(220,255,220)
@@ -461,7 +461,7 @@ sequenceDiagram
     S-->>C: BindComplete, rows, CommandComplete, ReadyForQuery
     end
     rect rgb(255,220,220)
-    C->>S: Q "RESET otel.traceparent"
+    C->>S: Q "RESET otel_api.traceparent"
     S-->>C: CommandComplete, ReadyForQuery
     end
 ```
@@ -497,7 +497,7 @@ sequenceDiagram
     participant S as Postgres
     Note over C,S: single Q frame — both statements travel in one TCP write (1 RTT)
     rect rgb(255,210,170)
-    C->>S: "SET LOCAL otel.traceparent='...'" prefix (trace-context overhead, no extra RTT)
+    C->>S: "SET LOCAL otel_api.traceparent='...'" prefix (trace-context overhead, no extra RTT)
     end
     rect rgb(220,255,220)
     C->>S: "SELECT ... WHERE id=N" (baseline query, same Q frame)
@@ -525,7 +525,7 @@ sequenceDiagram
     participant S as Postgres
     rect rgb(255,220,220)
     Note over C,S: extra Parse RTT (cache-miss SET LOCAL — varies every iter)
-    C->>S: Parse "SET LOCAL otel.traceparent='...'" + Sync
+    C->>S: Parse "SET LOCAL otel_api.traceparent='...'" + Sync
     S-->>C: ParseComplete, ReadyForQuery
     end
     Note over C,S: pgx.Batch flush — all four B+E groups in one TCP write (1 RTT)
