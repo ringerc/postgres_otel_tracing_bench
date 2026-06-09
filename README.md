@@ -58,12 +58,12 @@ of attaching a W3C trace context to a SQL workload. See
 
 | Mode | Wire shape | RTTs | Statement cache |
 |------|------------|------|-----------------|
-| 1a | `BEGIN; SET LOCAL otel.traceparent=...; <SQL>; COMMIT;` (sequential) | 4 | hits |
-| 1b | `SET ...; <SQL>; RESET ...;` (sequential) | 3 | hits |
-| 2a | `SET LOCAL ...; <SQL>;` as a multi-statement simple `Q` | 1 | **misses** (simple protocol) |
-| 2b | `pgx.Batch` with `BEGIN/SET LOCAL/<SQL>/COMMIT` under one Sync | 1 | hits |
-| 3  | sqlcommenter SQL-comment prepend | 1 | **misses every iteration** (SQL text changes) |
-| 4  | `M` (RequestHeaders) frontend message | 1 | hits |
+| [1a](#mode-1a) | `BEGIN; SET LOCAL otel.traceparent=...; <SQL>; COMMIT;` (sequential) | 4 | hits |
+| [1b](#mode-1b) | `SET ...; <SQL>; RESET ...;` (sequential) | 3 | hits |
+| [2a](#mode-2a) | `SET LOCAL ...; <SQL>;` as a multi-statement simple `Q` | 1 | **misses** (simple protocol) |
+| [2b](#mode-2b) | `pgx.Batch` with `BEGIN/SET LOCAL/<SQL>/COMMIT` under one Sync | 1 | hits |
+| [3](#mode-3)  | sqlcommenter SQL-comment prepend | 1 | **misses every iteration** (SQL text changes) |
+| [4](#mode-4)  | `M` (RequestHeaders) frontend message | 1 | hits |
 
 Mode 4 requires a patched pgx (see [pgx_patches](#pgx_patches)) and a
 patched postgres ([PR #3](https://github.com/ringerc/postgres/pull/3)).
@@ -113,6 +113,7 @@ See [`internal/modes/*.go`](internal/modes/) for the per-mode wire-shape
 notes. Each mode's per-iteration message sequence in cache-warm steady
 state:
 
+<a id="mode-1a"></a>
 ### Mode 1a: `BEGIN`; `SET LOCAL`; SQL; `COMMIT` (sequential)
 
 The "explicit-transaction SET LOCAL" pattern. Statement cache hits on
@@ -137,6 +138,7 @@ sequenceDiagram
 **4 RTT.** Fairest baseline for "what you get if you wrap each
 instrumented query in an explicit transaction."
 
+<a id="mode-1b"></a>
 ### Mode 1b: `SET`; SQL; `RESET` (sequential, no wrapping txn)
 
 Session-level `SET` plus `RESET`. Models the naive instrumentation
@@ -158,26 +160,41 @@ sequenceDiagram
 
 **3 RTT.**
 
+<a id="mode-2a"></a>
 ### Mode 2a: multi-statement simple `Q`
 
-Packs `SET LOCAL ...; <SQL>;` into a single `Q` frame. Postgres treats
-multi-statement simple Qs as one implicit transaction, so SET LOCAL
-applies to the SQL that follows. Pays no protocol-level overhead per
-extra statement, but forces simple protocol → no parameter binding, no
-statement cache, fresh server-side parse + plan every iteration.
+Packs `SET LOCAL ...` and the workload SQL into a single `Q` frame
+separated by a `;`. Postgres treats a multi-statement simple Q as one
+implicit transaction, so SET LOCAL applies to the SQL that follows.
+Cheapest on RTT but forces the **simple query protocol**, which has
+two structural downsides beyond the cache loss the table already
+notes:
+
+- **No server-side parameter binding** — every literal value (the
+  traceparent string, the `id` lookup parameter) is client-interpolated
+  into the SQL text. Escaping correctness becomes an application
+  responsibility instead of being handled by the protocol's typed Bind
+  message; mis-escaped values become a SQL-injection vector.
+- **No prepared statements** — neither pgx's automatic statement cache
+  nor an explicit `PREPARE`/`EXECUTE` path is available, because both
+  live exclusively on the v3 extended protocol's Parse/Bind/Execute
+  message sequence. Every iteration pays a fresh server-side parse +
+  plan regardless of how stable the SQL text is.
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant C as Client
     participant S as Postgres
-    C->>S: Q "SET LOCAL otel.traceparent='...'; SELECT ... WHERE id=N"
-    Note over S: one implicit transaction; literals client-interpolated
+    Note right of C: SQL text (client-interpolated)<br/>SET LOCAL otel.traceparent='...'<br/>SELECT ... WHERE id=N
+    C->>S: Q (multi-statement, simple protocol)
+    Note over S: one implicit transaction, fresh parse + plan
     S-->>C: CommandComplete (SET), rows, CommandComplete (SELECT), ReadyForQuery
 ```
 
 **1 RTT.** Cheapest on RTT, most expensive on server-side parse work.
 
+<a id="mode-2b"></a>
 ### Mode 2b: `pgx.Batch` pipelined under one Sync
 
 `pgx.SendBatch` queues `BEGIN` / `SET LOCAL` / `<SQL>` / `COMMIT` and
@@ -201,6 +218,7 @@ sequenceDiagram
 **2 RTT** in steady state. Workload SQL hits the cache; SET LOCAL doesn't,
 and the wrapping transaction adds an XACT_COMMIT WAL record each iter.
 
+<a id="mode-3"></a>
 ### Mode 3: sqlcommenter SQL-comment prepend
 
 Prepends `/*traceparent='...',tracestate='...'*/` to the workload SQL.
@@ -224,6 +242,7 @@ sequenceDiagram
 LRU cap; the `otelbench demo sqlcommenter-pool-break` subcommand is the
 standalone pathology demo.
 
+<a id="mode-4"></a>
 ### Mode 4: `M` (RequestHeaders) frame + workload SQL
 
 The patched-pgx path. An `M` frame carrying the trace context is queued
