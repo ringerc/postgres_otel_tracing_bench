@@ -264,6 +264,16 @@ sequenceDiagram
 LRU cap; the `otelbench demo sqlcommenter-pool-break` subcommand is the
 standalone pathology demo.
 
+**This mode breaks pgx's automatic statement cache outright** — the
+per-query SQL-text mutation defeats the cache key, every query pays a
+fresh `Parse` round trip and allocates a new prepared statement on the
+backend until pgx's LRU evicts an older one. Tracked upstream as
+[jackc/pgx#1935](https://github.com/jackc/pgx/issues/1935). Until that
+is resolved (one option discussed there: a `QueryRewriter` that injects
+the comment *after* the cache lookup), there is no way to combine
+sqlcommenter with `cache_statement` mode without paying this cost on
+every call.
+
 <a id="mode-4"></a>
 ### Mode 4: `M` (RequestHeaders) frame + workload SQL
 
