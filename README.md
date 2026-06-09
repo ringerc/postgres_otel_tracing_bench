@@ -68,28 +68,103 @@ of attaching a W3C trace context to a SQL workload. See
 `crossregion` (~30 ms RTT) is in
 [`2026-06-09-crossregion-single.md`](docs/results/2026-06-09-crossregion-single.md).
 
-| Mode | Wire shape | RTTs | Statement cache | intra-AZ (~2 ms RTT) p50, % over untraced | WAN (~30 ms RTT) p50, % over untraced |
-|------|------------|------|-----------------|---|---|
-| [1a](#mode-1a) | `BEGIN; SET LOCAL ...; <SQL>; COMMIT;` (sequential) | 4 | hits | 10.4 ms, **+420 %** | 121 ms, **+300 %** |
-| [1b](#mode-1b) | `SET ...; <SQL>; RESET ...;` (sequential) | 3 | hits | 7.9 ms, **+295 %** | 91 ms, **+200 %** |
-| [2a](#mode-2a) | `SET LOCAL ...; <SQL>;` as multi-statement simple `Q` | 1 | **misses** (simple protocol) | 2.7 ms, **+35 %** | 30.5 ms, **+2 %** |
-| [2b](#mode-2b) | `pgx.Batch` with `BEGIN/SET LOCAL/<SQL>/COMMIT` under one Sync | 1 advertised, **2 measured**¹ | hits | 5.4 ms, **+170 %** | 61 ms, **+100 %** |
-| [3](#mode-3)  | sqlcommenter SQL-comment prepend | 1 advertised, **2 measured**¹ | **misses every iteration** (SQL text changes) | 5.5 ms, **+175 %** | 61 ms, **+100 %** |
-| [4](#mode-4)  | `M` (RequestHeaders) frontend message | 1 | hits | ~2 ms, **~0 %** | 30.1 ms, **+0.3 %** |
+<table>
+  <thead>
+    <tr>
+      <th rowspan="3">Mode</th>
+      <th rowspan="3">Wire shape</th>
+      <th rowspan="3">RTTs</th>
+      <th rowspan="3">Statement cache</th>
+      <th colspan="6">tracing overhead and %</th>
+    </tr>
+    <tr>
+      <th colspan="3">intra-AZ¹</th>
+      <th colspan="3">WAN²</th>
+    </tr>
+    <tr>
+      <th>untraced³</th><th>traced</th><th>%</th>
+      <th>untraced³</th><th>traced</th><th>%</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><a href="#mode-1a">1a</a></td>
+      <td><code>BEGIN; SET LOCAL ...; &lt;SQL&gt;; COMMIT;</code> (sequential)</td>
+      <td>4</td>
+      <td>hits</td>
+      <td>~2 ms</td><td>10.4 ms</td><td><b>+420 %</b></td>
+      <td>~30 ms</td><td>121 ms</td><td><b>+300 %</b></td>
+    </tr>
+    <tr>
+      <td><a href="#mode-1b">1b</a></td>
+      <td><code>SET ...; &lt;SQL&gt;; RESET ...;</code> (sequential)</td>
+      <td>3</td>
+      <td>hits</td>
+      <td>~2 ms</td><td>7.8 ms</td><td><b>+290 %</b></td>
+      <td>~30 ms</td><td>91 ms</td><td><b>+200 %</b></td>
+    </tr>
+    <tr>
+      <td><a href="#mode-2a">2a</a></td>
+      <td><code>SET LOCAL ...; &lt;SQL&gt;;</code> as multi-statement simple <code>Q</code></td>
+      <td>1</td>
+      <td><b>misses</b> (simple protocol)</td>
+      <td>~2 ms</td><td>2.8 ms</td><td><b>+40 %</b></td>
+      <td>~30 ms</td><td>30.5 ms</td><td><b>+2 %</b></td>
+    </tr>
+    <tr>
+      <td><a href="#mode-2b">2b</a></td>
+      <td><code>pgx.Batch</code> with <code>BEGIN/SET LOCAL/&lt;SQL&gt;/COMMIT</code> under one Sync</td>
+      <td>1 advertised, <b>2 measured</b>⁴</td>
+      <td>hits</td>
+      <td>~2 ms</td><td>5.4 ms</td><td><b>+170 %</b></td>
+      <td>~30 ms</td><td>61 ms</td><td><b>+100 %</b></td>
+    </tr>
+    <tr>
+      <td><a href="#mode-3">3</a></td>
+      <td>sqlcommenter SQL-comment prepend</td>
+      <td>1 advertised, <b>2 measured</b>⁴</td>
+      <td><b>misses every iteration</b> (SQL text changes)</td>
+      <td>~2 ms</td><td>5.6 ms</td><td><b>+180 %</b></td>
+      <td>~30 ms</td><td>61 ms</td><td><b>+100 %</b></td>
+    </tr>
+    <tr>
+      <td><a href="#mode-4">4</a></td>
+      <td><code>M</code> (RequestHeaders) frontend message</td>
+      <td>1</td>
+      <td>hits</td>
+      <td>~2 ms<sup>★</sup></td><td>~2 ms<sup>★</sup></td><td><b>~0 %</b><sup>★</sup></td>
+      <td>~30 ms</td><td>30.1 ms</td><td><b>+0.3 %</b></td>
+    </tr>
+  </tbody>
+</table>
 
-¹ Modes 2b and 3 would be 1 RTT if the SET LOCAL value (2b) / SQL
-comment (3) didn't vary every iteration — but they do, so pgx's
-automatic statement cache misses every call and pays an extra `Parse`
-round trip. See the per-mode diagrams.
+¹ intra-AZ figures are p50 from a 200-iteration `--sweep-latency` run at
+the `intradc` toxiproxy preset (1 ms one-way, ~2 ms RTT).
 
-**Untraced baseline** for the % overhead column = the same parameterized
-SELECT issued via extended protocol with a cache-hit (`Bind` + `Execute`
-+ `Sync`), ≈ 1 × RTT. So the intra-AZ baseline is ~2 ms and the WAN
-baseline is ~30 ms. WAN numbers are direct measurements from
-[`docs/results/2026-06-09-crossregion-single.md`](docs/results/2026-06-09-crossregion-single.md);
-intra-AZ numbers are from a separate run at the `intradc` preset (~2 ms
-RTT) and from extrapolation for Mode 4 (which the canned dataset only
-captured at `crossregion`).
+² WAN figures are p50 from
+[`docs/results/2026-06-09-crossregion-single.md`](docs/results/2026-06-09-crossregion-single.md)
+(200 iterations at the `crossregion` preset, 15 ms one-way, ~30 ms RTT).
+
+³ **Untraced baselines are NOT directly measured.** The harness has no
+"no-propagation" mode; the baseline value is the theoretical 1 × RTT
+that a cache-hit `Bind`+`Execute`+`Sync` would take through the same
+toxiproxy preset — i.e. the network delay itself, since the workload's
+server-side time is sub-millisecond. The `%` column treats this RTT as
+the denominator. A future revision could add an explicit "mode 0"
+(unpropagated query) to the harness and measure it directly.
+
+⁴ Modes 2b and 3 would be 1 RTT if the SET LOCAL value (2b) or the
+sqlcommenter SQL comment (3) didn't vary every iteration — but they do,
+so pgx's automatic statement cache misses every call and pays an extra
+`Parse` round trip. See the per-mode diagrams.
+
+<sup>★</sup> Mode 4 at intra-AZ is **extrapolated**, not measured. The
+canned `crossregion` dataset captures it (and shows the expected 1 × RTT
+shape, +0.3 % over baseline); the `intradc` sweep predates Mode 4's
+implementation. Extrapolation: the M frame adds ~150 µs of in-process
+overhead measurable at the `none` preset; at 2 ms RTT this is in the
+noise and `~0 %` is the predicted figure. Worth a follow-up measurement
+to confirm.
 
 Mode 4 requires a patched pgx (see [pgx_patches](#pgx_patches)) and a
 patched postgres ([PR #3](https://github.com/ringerc/postgres/pull/3)).
