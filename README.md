@@ -70,7 +70,10 @@ This isn't a `pgbench` replacement. The workload is intentionally trivial
 (one parameterized SELECT or N parameterized SELECTs in a batch) so the
 protocol-shape delta isn't drowned by query execution cost. It's also
 not a correctness or compatibility test for trace propagation — it
-assumes contrib/otel works.
+assumes contrib/otel works. contrib/otel ships its own test coverage
+(the TAP suites under `contrib/otel/t/` and `contrib/otel_postgres_tracing/t/`
+in [PR #1][pr1], plus the test_protocol_headers module in [PR #3][pr3]);
+this harness measures performance, not correctness.
 
 ## CLI
 
