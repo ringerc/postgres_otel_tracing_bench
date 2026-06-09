@@ -92,13 +92,16 @@ func Setup(ctx context.Context, endpoint string) (*Provider, error) {
 		return &Provider{enabled: false}, nil
 	}
 
-	// Resource: identifies this process in the collector. The schema
-	// URL must match the semconv version we import; mismatched
-	// schemas trigger a warning from the SDK.
+	// Resource: identifies this process in the collector. We build the
+	// custom resource schemaless (no schema URL) rather than tagging it
+	// with our semconv version's SchemaURL: resource.Merge hard-errors
+	// when both inputs carry different non-empty schema URLs, and
+	// resource.Default()'s URL tracks the SDK's own semconv version,
+	// which drifts ahead of whatever semconv package we import. A
+	// schemaless resource merges cleanly and inherits Default()'s URL.
 	res, err := resource.Merge(
 		resource.Default(),
-		resource.NewWithAttributes(
-			semconv.SchemaURL,
+		resource.NewSchemaless(
 			semconv.ServiceName(serviceName),
 		),
 	)
