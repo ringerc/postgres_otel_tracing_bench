@@ -15,6 +15,7 @@ import (
 	"github.com/ringerc/postgres_otel_tracing_bench/internal/metrics"
 	"github.com/ringerc/postgres_otel_tracing_bench/internal/modes"
 	"github.com/ringerc/postgres_otel_tracing_bench/internal/runner"
+	"github.com/ringerc/postgres_otel_tracing_bench/internal/tracing"
 	"github.com/ringerc/postgres_otel_tracing_bench/internal/workload"
 )
 
@@ -121,6 +122,17 @@ func runBench(cmd *cobra.Command, f *BenchFlags) error {
 		defer cancel()
 	}
 
+	tp, err := tracing.Setup(ctx, f.Common.OTLPEndpoint)
+	if err != nil {
+		return fmt.Errorf("tracing setup: %w", err)
+	}
+	defer func() {
+		// Allow up to 5s for the last batch of spans to flush.
+		shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = tp.Shutdown(shutCtx)
+	}()
+
 	var cells []*metrics.Cell
 	for _, preset := range latencyPresets {
 		if toxic != nil {
@@ -145,6 +157,7 @@ func runBench(cmd *cobra.Command, f *BenchFlags) error {
 				LatencyPreset:  string(preset),
 				ConnectTimeout: f.Common.ConnectTimeout,
 				RuntimeParams:  runtimeParamsFor(m),
+				Tracing:        tp,
 			})
 			if cell != nil {
 				cells = append(cells, cell)
