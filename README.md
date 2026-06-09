@@ -59,6 +59,71 @@ the client.
 
 [pgxp]: https://github.com/ringerc/pgx_patches
 
+### How the pieces connect
+
+```mermaid
+flowchart TB
+    pg([postgres/postgres<br/>master])
+    pgx([jackc/pgx<br/>v5.10.0])
+
+    pr1["PR #1<br/>contrib/otel +<br/>contrib/otel_postgres_tracing"]
+    pr3["PR #3<br/>core protocol headers<br/>('M' message + libpq)"]
+    pr4["PR #4<br/>core pre_ready_for_query_hook"]
+    pr5["PR #5<br/>core elog annotations"]
+
+    pgbranch["ringerc/postgres<br/>branch postgres-otel-tracing<br/>= merge of #1 + #3 + #4 + #5"]
+
+    pgxbranch["ringerc/pgx_patches<br/>branch m-protocol-headers<br/>adds pgproto3.RequestHeaders"]
+
+    demo["ringerc/postgres_otel_tracing_demo<br/>Rust cdylib loaded as<br/>shared_preload_libraries"]
+    deploy["deploy/ docker-compose<br/>bundles patched postgres + demo<br/>+ toxiproxy + collector + Jaeger"]
+    bench[["ringerc/postgres_otel_tracing_bench<br/>(this repo --- the Go harness)"]]
+
+    %% Postgres side
+    pg --> pr1
+    pg --> pr3
+    pg --> pr4
+    pg --> pr5
+    pr1 --> pgbranch
+    pr3 --> pgbranch
+    pr4 --> pgbranch
+    pr5 --> pgbranch
+
+    %% pgx side
+    pgx --> pgxbranch
+    pr3 -. wire-format<br/>agreement .-> pgxbranch
+
+    %% Out-of-tree consumers
+    pr1 -. pg_config<br/>+ otel.h .-> demo
+    pgbranch --> deploy
+    demo --> deploy
+
+    %% Bench dependencies
+    pgx -- "default build" --> bench
+    pgxbranch -. "go.mod replace<br/>-tags=patched_pgx" .-> bench
+    deploy -. "runtime target<br/>(DSN + Jaeger UI)" .-> bench
+
+    classDef upstream fill:#eef,stroke:#447,stroke-width:1px
+    classDef ours fill:#efe,stroke:#474,stroke-width:1px
+    classDef thisrepo fill:#ffe,stroke:#774,stroke-width:2px
+    class pg,pgx upstream
+    class pr1,pr3,pr4,pr5,pgbranch,pgxbranch,demo,deploy ours
+    class bench thisrepo
+```
+
+**Reading the graph.** Blue nodes are upstream; green nodes are work in
+the ringerc repos; yellow is this repo. Solid arrows are "is built
+from" relationships. Dotted arrows are dependency or interface
+agreements (the wire format that PR #3 and `pgx_patches` must agree
+on; the headers contrib/otel exposes that the demo extension consumes;
+the runtime targets the bench expects to talk to).
+
+The bench has two build modes determined by the `patched_pgx` build
+tag: without it, only the upstream `jackc/pgx` solid edge is active
+and Mode 4 is unregistered; with it, the dotted `pgx_patches` edge
+activates via the `go.mod replace` directive and Mode 4 joins the
+registry.
+
 ## What it measures
 
 Per-iteration latency, wire-byte counts, and postgres-side
