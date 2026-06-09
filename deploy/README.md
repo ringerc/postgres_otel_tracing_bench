@@ -105,11 +105,14 @@ docker compose down -v         # stop and wipe the postgres data volume
 
 ### postgres
 
-Built from `ringerc/postgres` branch `postgres-otel-tracing`. The
-`shared_preload_libraries` list loads (in order): `otel`,
-`otel_postgres_tracing`, `postgres_otel_tracing_demo`,
-`pg_stat_statements`. `protocol_headers = on` enables the `'M'`
-wire message used by Mode 4.
+Built from `ringerc/postgres` branch `postgres-otel-tracing` (which
+in turn subtree-merges
+[`ringerc/postgres_otel_api`](https://github.com/ringerc/postgres_otel_api)
+into `contrib/`). The `shared_preload_libraries` list loads (in
+order): `otel_api`, `otel_postgres_tracing`,
+`postgres_otel_tracing_demo`, `pg_stat_statements`.
+`protocol_headers = on` enables the `'M'` wire message used by
+Mode 4.
 
 The Rust demo extension is built in a separate stage (`demo-builder`)
 against the installed `pg_config` and dropped into

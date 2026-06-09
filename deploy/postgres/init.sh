@@ -43,7 +43,7 @@ createdb_query() {
     psql -h /tmp -U postgres -d postgres -v ON_ERROR_STOP=1 -c "$1"
 }
 
-createdb_query "CREATE EXTENSION IF NOT EXISTS otel;"
+createdb_query "CREATE EXTENSION IF NOT EXISTS otel_api;"
 createdb_query "CREATE EXTENSION IF NOT EXISTS otel_postgres_tracing;"
 createdb_query "CREATE EXTENSION IF NOT EXISTS pg_stat_statements;"
 # postgres_otel_tracing_demo is a preload-only module (no SQL surface,
