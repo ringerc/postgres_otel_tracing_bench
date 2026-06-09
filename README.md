@@ -15,7 +15,7 @@ links them under the same `trace_id` as the client-side spans.
 ### Related work
 
 This repo sits inside a four-PR series against `ringerc/postgres` plus a
-sibling demo crate that show the end-to-end picture:
+sibling demo extension that show the end-to-end picture:
 
 | Component | Where | What |
 |---|---|---|
@@ -23,7 +23,7 @@ sibling demo crate that show the end-to-end picture:
 | `core: protocol headers` (`'M'`) | [postgres PR #3][pr3] | Adds the `'M'` (RequestHeaders) frontend message and `_pq_.headers=1` negotiation. Required for Mode 4. |
 | `core: pre_ready_for_query_hook` | [postgres PR #4][pr4] | Statement-scope hook used by future `contrib/otel` features; not currently exercised by this harness. |
 | `core: elog annotations` | [postgres PR #5][pr5] | Generic key/value annotations on `ErrorData` so trace context surfaces in JSON/CSV log output via `%A` / `%{key}A`. Not exercised by benchmark numbers but visible in trace correlation. |
-| `postgres_otel_tracing_demo` | [demo crate][demo] | A real-`opentelemetry-rust` SDK consumer of contrib/otel's span-emit hook. The collector this benchmark talks to typically receives spans from both this harness (client side, via otelpgx) and the demo crate (server side, via contrib/otel). |
+| `postgres_otel_tracing_demo` | [demo extension][demo] | A postgres extension (Rust-built `cdylib`, loaded via `shared_preload_libraries`) that consumes contrib/otel's span-emit hook and ships spans via the real `opentelemetry-rust` SDK. The collector this benchmark talks to typically receives spans from both this harness (client side, via `otelpgx`) and the demo extension (server side, via contrib/otel). |
 | **`postgres_otel_tracing_bench`** | this repo | The Go harness — what you're reading. |
 
 [pr1]: https://github.com/ringerc/postgres/pull/1
