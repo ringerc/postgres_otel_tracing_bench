@@ -144,6 +144,7 @@ func runBench(cmd *cobra.Command, f *BenchFlags) error {
 				Iterations:     f.Iterations,
 				LatencyPreset:  string(preset),
 				ConnectTimeout: f.Common.ConnectTimeout,
+				RuntimeParams:  runtimeParamsFor(m),
 			})
 			if cell != nil {
 				cells = append(cells, cell)
@@ -175,6 +176,16 @@ func anyNonPassthrough(ps []latency.Preset) bool {
 		}
 	}
 	return false
+}
+
+// runtimeParamsFor returns the StartupMessage extras needed for a given
+// mode. Mode 4 ('M' RequestHeaders) requires _pq_.headers=1; everyone
+// else gets an empty map.
+func runtimeParamsFor(m modes.Mode) map[string]string {
+	if m.ID() == "4" {
+		return map[string]string{"_pq_.headers": "1"}
+	}
+	return nil
 }
 
 func parseModeList(spec string) ([]string, error) {

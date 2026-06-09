@@ -36,6 +36,12 @@ type Config struct {
 
 	// ConnectTimeout caps the initial Connect attempt.
 	ConnectTimeout time.Duration
+
+	// RuntimeParams are extra StartupMessage parameters to set on the
+	// pgconn config before dialing. Modes that need protocol-level
+	// negotiation (e.g. Mode 4 with _pq_.headers=1) thread their
+	// requirements through here.
+	RuntimeParams map[string]string
 }
 
 // Run executes one cell against the database. The returned Cell is
@@ -55,7 +61,17 @@ func Run(ctx context.Context, cfg Config) (*metrics.Cell, error) {
 		connectCtx, cancel = context.WithTimeout(ctx, cfg.ConnectTimeout)
 		defer cancel()
 	}
-	conn, err := pgx.Connect(connectCtx, cfg.DSN)
+	pgxConfig, err := pgx.ParseConfig(cfg.DSN)
+	if err != nil {
+		return nil, fmt.Errorf("parse DSN %q: %w", cfg.DSN, err)
+	}
+	if pgxConfig.RuntimeParams == nil {
+		pgxConfig.RuntimeParams = map[string]string{}
+	}
+	for k, v := range cfg.RuntimeParams {
+		pgxConfig.RuntimeParams[k] = v
+	}
+	conn, err := pgx.ConnectConfig(connectCtx, pgxConfig)
 	if err != nil {
 		return nil, fmt.Errorf("connect %q: %w", cfg.DSN, err)
 	}
