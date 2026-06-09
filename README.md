@@ -130,7 +130,7 @@ state follows.
 - 🔴 **red** — trace-propagation overhead that **adds a new round trip**.
   This is the worst category: latency directly proportional to network
   RTT.
-- 🟡 **yellow** — trace-propagation overhead that **doesn't add a new
+- 🟠 **orange** — trace-propagation overhead that **doesn't add a new
   round trip**. Extra wire bytes and/or extra server-side processing
   bundled into a round trip that would have happened anyway. Cost
   scales with bandwidth and server CPU, not RTT.
@@ -226,7 +226,7 @@ sequenceDiagram
     participant C as Client
     participant S as Postgres
     Note over C,S: single Q frame — both statements travel in one TCP write (1 RTT)
-    rect rgb(255,245,180)
+    rect rgb(255,210,170)
     C->>S: "SET LOCAL otel.traceparent='...'" prefix (trace-context overhead, no extra RTT)
     end
     rect rgb(220,255,220)
@@ -259,7 +259,7 @@ sequenceDiagram
     S-->>C: ParseComplete, ReadyForQuery
     end
     Note over C,S: pgx.Batch flush — all four B+E groups in one TCP write (1 RTT)
-    rect rgb(255,245,180)
+    rect rgb(255,210,170)
     C->>S: B+E (BEGIN), B+E (SET LOCAL), B+E (COMMIT) (wrapping txn + trace context, no extra RTT)
     end
     rect rgb(220,255,220)
@@ -346,7 +346,7 @@ sequenceDiagram
     participant C as Client
     participant S as Postgres
     Note over C,S: single TCP write — both messages flush together (1 RTT)
-    rect rgb(255,245,180)
+    rect rgb(255,210,170)
     C->>S: M {otel.traceparent='...'} (trace-context frame, no extra RTT)
     end
     rect rgb(220,255,220)
