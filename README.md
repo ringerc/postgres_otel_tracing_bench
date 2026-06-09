@@ -121,9 +121,19 @@ processes; see the [Running](#running) section.
 
 See [`internal/modes/*.go`](internal/modes/) for the per-mode wire-shape
 notes. Each mode's per-iteration message sequence in cache-warm steady
-state. In the diagrams below, **🔴 red** highlights traffic added purely
-for trace-context propagation and **🟢 green** highlights what would be
-on the wire for the same query without tracing.
+state follows.
+
+**Diagram colour key.** Each `rect` block highlights one of three things:
+
+- 🟢 **green** — the baseline. What would be on the wire for the same
+  query without trace propagation.
+- 🔴 **red** — trace-propagation overhead that **adds a new round trip**.
+  This is the worst category: latency directly proportional to network
+  RTT.
+- 🟡 **yellow** — trace-propagation overhead that **doesn't add a new
+  round trip**. Extra wire bytes and/or extra server-side processing
+  bundled into a round trip that would have happened anyway. Cost
+  scales with bandwidth and server CPU, not RTT.
 
 <a id="mode-1a"></a>
 ### Mode 1a: `BEGIN`; `SET LOCAL`; SQL; `COMMIT` (sequential)
@@ -216,8 +226,8 @@ sequenceDiagram
     participant C as Client
     participant S as Postgres
     Note over C,S: single Q frame — both statements travel in one TCP write (1 RTT)
-    rect rgb(255,220,220)
-    C->>S: "SET LOCAL otel.traceparent='...'" prefix (trace-context overhead)
+    rect rgb(255,245,180)
+    C->>S: "SET LOCAL otel.traceparent='...'" prefix (trace-context overhead, no extra RTT)
     end
     rect rgb(220,255,220)
     C->>S: "SELECT ... WHERE id=N" (baseline query, same Q frame)
@@ -249,8 +259,8 @@ sequenceDiagram
     S-->>C: ParseComplete, ReadyForQuery
     end
     Note over C,S: pgx.Batch flush — all four B+E groups in one TCP write (1 RTT)
-    rect rgb(255,220,220)
-    C->>S: B+E (BEGIN), B+E (SET LOCAL), B+E (COMMIT) (wrapping txn + trace context, overhead)
+    rect rgb(255,245,180)
+    C->>S: B+E (BEGIN), B+E (SET LOCAL), B+E (COMMIT) (wrapping txn + trace context, no extra RTT)
     end
     rect rgb(220,255,220)
     C->>S: B+E (cached SQL, $1=id), Sync (baseline query)
@@ -336,8 +346,8 @@ sequenceDiagram
     participant C as Client
     participant S as Postgres
     Note over C,S: single TCP write — both messages flush together (1 RTT)
-    rect rgb(255,220,220)
-    C->>S: M {otel.traceparent='...'} (trace-context frame, overhead)
+    rect rgb(255,245,180)
+    C->>S: M {otel.traceparent='...'} (trace-context frame, no extra RTT)
     end
     rect rgb(220,255,220)
     C->>S: Bind+Execute (cached SQL, $1=id), Sync (baseline query)
