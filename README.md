@@ -121,7 +121,9 @@ processes; see the [Running](#running) section.
 
 See [`internal/modes/*.go`](internal/modes/) for the per-mode wire-shape
 notes. Each mode's per-iteration message sequence in cache-warm steady
-state:
+state. In the diagrams below, **🔴 red** highlights traffic added purely
+for trace-context propagation and **🟢 green** highlights what would be
+on the wire for the same query without tracing.
 
 <a id="mode-1a"></a>
 ### Mode 1a: `BEGIN`; `SET LOCAL`; SQL; `COMMIT` (sequential)
@@ -135,18 +137,28 @@ sequenceDiagram
     autonumber
     participant C as Client
     participant S as Postgres
+    rect rgb(255,220,220)
     C->>S: Q "BEGIN"
     S-->>C: CommandComplete, ReadyForQuery
+    end
+    rect rgb(255,220,220)
     C->>S: Q "SET LOCAL otel.traceparent='...'"
     S-->>C: CommandComplete, ReadyForQuery
+    end
+    rect rgb(220,255,220)
     C->>S: Bind+Execute+Sync (cached SQL, $1=id)
     S-->>C: BindComplete, rows, CommandComplete, ReadyForQuery
+    end
+    rect rgb(255,220,220)
     C->>S: Q "COMMIT"
     S-->>C: CommandComplete, ReadyForQuery
+    end
 ```
 
-**4 RTT.** Fairest baseline for "what you get if you wrap each
-instrumented query in an explicit transaction."
+**4 RTT** — only the third is the query you'd issue anyway; the other
+three are pure trace-propagation overhead. Fairest baseline for "what
+you get if you wrap each instrumented query in an explicit
+transaction."
 
 <a id="mode-1b"></a>
 ### Mode 1b: `SET`; SQL; `RESET` (sequential, no wrapping txn)
@@ -160,15 +172,22 @@ sequenceDiagram
     autonumber
     participant C as Client
     participant S as Postgres
+    rect rgb(255,220,220)
     C->>S: Q "SET otel.traceparent='...'"
     S-->>C: CommandComplete, ReadyForQuery
+    end
+    rect rgb(220,255,220)
     C->>S: Bind+Execute+Sync (cached SQL, $1=id)
     S-->>C: BindComplete, rows, CommandComplete, ReadyForQuery
+    end
+    rect rgb(255,220,220)
     C->>S: Q "RESET otel.traceparent"
     S-->>C: CommandComplete, ReadyForQuery
+    end
 ```
 
-**3 RTT.**
+**3 RTT** — middle round trip is the query; the SET and RESET bracketing
+it are overhead.
 
 <a id="mode-2a"></a>
 ### Mode 2a: multi-statement simple `Q`
@@ -196,13 +215,20 @@ sequenceDiagram
     autonumber
     participant C as Client
     participant S as Postgres
-    Note right of C: SQL text (client-interpolated)<br/>SET LOCAL otel.traceparent='...'<br/>SELECT ... WHERE id=N
-    C->>S: Q (multi-statement, simple protocol)
+    Note over C,S: single Q frame — both statements travel in one TCP write (1 RTT)
+    rect rgb(255,220,220)
+    C->>S: "SET LOCAL otel.traceparent='...'" prefix (trace-context overhead)
+    end
+    rect rgb(220,255,220)
+    C->>S: "SELECT ... WHERE id=N" (baseline query, same Q frame)
     Note over S: one implicit transaction, fresh parse + plan
     S-->>C: CommandComplete (SET), rows, CommandComplete (SELECT), ReadyForQuery
+    end
 ```
 
 **1 RTT.** Cheapest on RTT, most expensive on server-side parse work.
+Overhead is wire-bytes + extra server-side parse, not extra round
+trips.
 
 <a id="mode-2b"></a>
 ### Mode 2b: `pgx.Batch` pipelined under one Sync
@@ -217,12 +243,19 @@ sequenceDiagram
     autonumber
     participant C as Client
     participant S as Postgres
-    Note over C: SET LOCAL text varies every iter → cache miss → extra Parse RTT
+    rect rgb(255,220,220)
+    Note over C,S: extra Parse RTT (cache-miss SET LOCAL — varies every iter)
     C->>S: Parse "SET LOCAL otel.traceparent='...'" + Sync
     S-->>C: ParseComplete, ReadyForQuery
-    Note over C: pgx.Batch flush
-    C->>S: B+E (BEGIN), B+E (SET LOCAL), B+E (cached SQL), B+E (COMMIT), Sync
+    end
+    Note over C,S: pgx.Batch flush — all four B+E groups in one TCP write (1 RTT)
+    rect rgb(255,220,220)
+    C->>S: B+E (BEGIN), B+E (SET LOCAL), B+E (COMMIT) (wrapping txn + trace context, overhead)
+    end
+    rect rgb(220,255,220)
+    C->>S: B+E (cached SQL, $1=id), Sync (baseline query)
     S-->>C: ..., rows, ..., ReadyForQuery
+    end
 ```
 
 **2 RTT** in steady state. Workload SQL hits the cache; SET LOCAL doesn't,
@@ -263,11 +296,16 @@ sequenceDiagram
     autonumber
     participant C as Client
     participant S as Postgres
-    Note over C: workload SQL text changes every iter → cache miss → extra Parse RTT
+    rect rgb(255,220,220)
+    Note over C,S: extra Parse RTT (sqlcommenter mutated SQL → cache miss)
     C->>S: Parse "/*traceparent='...'*/ SELECT ... WHERE id=$1" + Sync
     S-->>C: ParseComplete, ReadyForQuery
+    end
+    rect rgb(220,255,220)
+    Note over C,S: Bind+Execute — would be the only round trip on a cache hit
     C->>S: Bind+Execute+Sync ($1=id)
     S-->>C: BindComplete, rows, CommandComplete, ReadyForQuery
+    end
 ```
 
 **2 RTT**, every iteration. `pg_prepared_statements` grows up to pgx's
@@ -297,10 +335,15 @@ sequenceDiagram
     autonumber
     participant C as Client
     participant S as Postgres
-    Note over C: M frame queued ahead of Bind/Execute
-    C->>S: M {otel.traceparent='...'}, Bind+Execute (cached SQL, $1=id), Sync
+    Note over C,S: single TCP write — both messages flush together (1 RTT)
+    rect rgb(255,220,220)
+    C->>S: M {otel.traceparent='...'} (trace-context frame, overhead)
+    end
+    rect rgb(220,255,220)
+    C->>S: Bind+Execute (cached SQL, $1=id), Sync (baseline query)
     Note over S: ApplyPendingRequestHeaders at next op boundary
     S-->>C: BindComplete, rows, CommandComplete, ReadyForQuery
+    end
 ```
 
 **1 RTT**, cache-friendly, no wrapping transaction — the only path that
@@ -334,8 +377,13 @@ connection to support the feature:
 - **Driver support.** Every client driver an application uses
   (pgx, libpq, psycopg, JDBC, npgsql, …) has to add support for
   emitting the `'M'` frame and negotiating `_pq_.headers=1` at
-  startup. This repo carries one such driver patch
-  ([ringerc/pgx_patches][pgxp]); the rest do not exist yet.
+  startup. Two such driver patches exist today: the [libpq
+  patch][pr3] in [PR #3][pr3] (which `psql`, psycopg via libpq,
+  and many other libpq-backed drivers consume transitively) and
+  the [ringerc/pgx_patches][pgxp] branch this repo links against
+  for Mode 4. Other drivers (JDBC, npgsql, asyncpg, psycopg's
+  native-Python path, …) still need their own patches before
+  the wire feature is reachable from their language.
 - **A new enough postgres.** The `'M'` message is server-side
   new in [PR #3][pr3]; even after that lands, every postgres
   the application talks to needs to be at the version that
