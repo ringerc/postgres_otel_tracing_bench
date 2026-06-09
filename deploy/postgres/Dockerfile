@@ -84,9 +84,14 @@ ARG DEMO_BRANCH
 WORKDIR /src
 RUN git clone --depth 1 --branch ${DEMO_BRANCH} ${DEMO_REPO} postgres_otel_tracing_demo
 WORKDIR /src/postgres_otel_tracing_demo
+# meson installs postgres with a multiarch libdir (e.g.
+# /opt/pgsql/lib/x86_64-linux-gnu), which is also its pkglibdir --- the
+# dir postgres searches for shared_preload_libraries by bare name. Ask
+# pg_config rather than hardcoding the triplet so this stays correct
+# across architectures.
 RUN cargo build --release \
     && install -m 0755 target/release/libpostgres_otel_tracing_demo.so \
-        /opt/pgsql/lib/postgresql/postgres_otel_tracing_demo.so
+        "$(pg_config --pkglibdir)/postgres_otel_tracing_demo.so"
 
 
 # --- Stage 3: Runtime --------------------------------------------------------
@@ -117,9 +122,10 @@ RUN mkdir -p /var/lib/postgresql/data \
     && chown -R postgres:postgres /var/lib/postgresql \
     && chmod 0700 /var/lib/postgresql/data
 
-COPY --from=pg-builder   /opt/pgsql /opt/pgsql
-COPY --from=demo-builder /opt/pgsql/lib/postgresql/postgres_otel_tracing_demo.so \
-                         /opt/pgsql/lib/postgresql/postgres_otel_tracing_demo.so
+# demo-builder's /opt/pgsql is pg-builder's tree plus the demo .so
+# installed into pkglibdir, so a single copy from demo-builder brings
+# over both postgres and the demo extension at their correct paths.
+COPY --from=demo-builder /opt/pgsql /opt/pgsql
 
 # Bench-specific postgres config + first-boot SQL.
 COPY postgresql.conf /opt/pgsql/share/postgresql/postgresql.conf.bench

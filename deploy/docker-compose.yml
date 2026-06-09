@@ -68,7 +68,7 @@ services:
       retries: 30
 
   toxiproxy:
-    image: ghcr.io/shopify/toxiproxy:2.12.0
+    image: ghcr.io/shopify/toxiproxy:2.10.0
     # The bench creates / removes / updates toxics via the control-plane
     # HTTP API at 8474. We pre-seed the "postgres" proxy via the JSON
     # config so the bench finds it on startup; without this the user
