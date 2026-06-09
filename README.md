@@ -88,83 +88,88 @@ of attaching a W3C trace context to a SQL workload. See
   </thead>
   <tbody>
     <tr>
+      <td><a href="#mode-0">0</a></td>
+      <td>Untraced baseline — workload SQL only</td>
+      <td>1</td>
+      <td>hits</td>
+      <td>2.6 ms</td><td>2.6 ms</td><td>—</td>
+      <td>30.2 ms</td><td>30.2 ms</td><td>—</td>
+    </tr>
+    <tr>
       <td><a href="#mode-1a">1a</a></td>
       <td><code>BEGIN; SET LOCAL ...; &lt;SQL&gt;; COMMIT;</code> (sequential)</td>
       <td>4</td>
       <td>hits</td>
-      <td>~2 ms</td><td>10.4 ms</td><td><b>+420 %</b></td>
-      <td>~30 ms</td><td>121 ms</td><td><b>+300 %</b></td>
+      <td>2.6 ms</td><td>10.4 ms</td><td><b>+300 %</b></td>
+      <td>30.2 ms</td><td>121 ms</td><td><b>+300 %</b></td>
     </tr>
     <tr>
       <td><a href="#mode-1b">1b</a></td>
       <td><code>SET ...; &lt;SQL&gt;; RESET ...;</code> (sequential)</td>
       <td>3</td>
       <td>hits</td>
-      <td>~2 ms</td><td>7.8 ms</td><td><b>+290 %</b></td>
-      <td>~30 ms</td><td>91 ms</td><td><b>+200 %</b></td>
+      <td>2.6 ms</td><td>7.6 ms</td><td><b>+190 %</b></td>
+      <td>30.2 ms</td><td>91 ms</td><td><b>+200 %</b></td>
     </tr>
     <tr>
       <td><a href="#mode-2a">2a</a></td>
       <td><code>SET LOCAL ...; &lt;SQL&gt;;</code> as multi-statement simple <code>Q</code></td>
       <td>1</td>
       <td><b>misses</b> (simple protocol)</td>
-      <td>~2 ms</td><td>2.8 ms</td><td><b>+40 %</b></td>
-      <td>~30 ms</td><td>30.5 ms</td><td><b>+2 %</b></td>
+      <td>2.6 ms</td><td>2.5 ms</td><td><b>~0 %</b>⁵</td>
+      <td>30.2 ms</td><td>30.5 ms</td><td><b>+1 %</b></td>
     </tr>
     <tr>
       <td><a href="#mode-2b">2b</a></td>
       <td><code>pgx.Batch</code> with <code>BEGIN/SET LOCAL/&lt;SQL&gt;/COMMIT</code> under one Sync</td>
-      <td>1 advertised, <b>2 measured</b>⁴</td>
+      <td>2⁴</td>
       <td>hits</td>
-      <td>~2 ms</td><td>5.4 ms</td><td><b>+170 %</b></td>
-      <td>~30 ms</td><td>61 ms</td><td><b>+100 %</b></td>
+      <td>2.6 ms</td><td>5.2 ms</td><td><b>+100 %</b></td>
+      <td>30.2 ms</td><td>60.5 ms</td><td><b>+100 %</b></td>
     </tr>
     <tr>
       <td><a href="#mode-3">3</a></td>
       <td>sqlcommenter SQL-comment prepend</td>
-      <td>1 advertised, <b>2 measured</b>⁴</td>
+      <td>2⁴</td>
       <td><b>misses every iteration</b> (SQL text changes)</td>
-      <td>~2 ms</td><td>5.6 ms</td><td><b>+180 %</b></td>
-      <td>~30 ms</td><td>61 ms</td><td><b>+100 %</b></td>
+      <td>2.6 ms</td><td>5.4 ms</td><td><b>+110 %</b></td>
+      <td>30.2 ms</td><td>61 ms</td><td><b>+100 %</b></td>
     </tr>
     <tr>
       <td><a href="#mode-4">4</a></td>
       <td><code>M</code> (RequestHeaders) frontend message</td>
       <td>1</td>
       <td>hits</td>
-      <td>~2 ms<sup>★</sup></td><td>~2 ms<sup>★</sup></td><td><b>~0 %</b><sup>★</sup></td>
-      <td>~30 ms</td><td>30.1 ms</td><td><b>+0.3 %</b></td>
+      <td>2.6 ms</td><td>2.7 ms</td><td><b>+5 %</b></td>
+      <td>30.2 ms</td><td>30.3 ms</td><td><b>+0.5 %</b></td>
     </tr>
   </tbody>
 </table>
 
-¹ intra-AZ figures are p50 from a 200-iteration `--sweep-latency` run at
-the `intradc` toxiproxy preset (1 ms one-way, ~2 ms RTT).
+¹ intra-AZ figures are p50 from a 500-iteration bench run at the
+`intradc` toxiproxy preset (1 ms one-way, ~2 ms RTT).
 
-² WAN figures are p50 from
-[`docs/results/2026-06-09-crossregion-single.md`](docs/results/2026-06-09-crossregion-single.md)
-(200 iterations at the `crossregion` preset, 15 ms one-way, ~30 ms RTT).
+² WAN figures are p50 from a 300-iteration bench run at the
+`crossregion` toxiproxy preset (15 ms one-way, ~30 ms RTT). See also
+[`docs/results/2026-06-09-crossregion-single.md`](docs/results/2026-06-09-crossregion-single.md).
 
-³ **Untraced baselines are NOT directly measured.** The harness has no
-"no-propagation" mode; the baseline value is the theoretical 1 × RTT
-that a cache-hit `Bind`+`Execute`+`Sync` would take through the same
-toxiproxy preset — i.e. the network delay itself, since the workload's
-server-side time is sub-millisecond. The `%` column treats this RTT as
-the denominator. A future revision could add an explicit "mode 0"
-(unpropagated query) to the harness and measure it directly.
+³ Untraced baselines (the `untraced` column) come from
+[Mode 0](#mode-0), which is the harness's explicit "no-propagation"
+baseline — pgx's normal cache-hit `Bind`+`Execute`+`Sync` issuing the
+same workload SQL with no trace context attached. The Mode 0 row's
+`%` column shows `—` because the comparison is against itself.
 
 ⁴ Modes 2b and 3 would be 1 RTT if the SET LOCAL value (2b) or the
 sqlcommenter SQL comment (3) didn't vary every iteration — but they do,
 so pgx's automatic statement cache misses every call and pays an extra
 `Parse` round trip. See the per-mode diagrams.
 
-<sup>★</sup> Mode 4 at intra-AZ is **extrapolated**, not measured. The
-canned `crossregion` dataset captures it (and shows the expected 1 × RTT
-shape, +0.3 % over baseline); the `intradc` sweep predates Mode 4's
-implementation. Extrapolation: the M frame adds ~150 µs of in-process
-overhead measurable at the `none` preset; at 2 ms RTT this is in the
-noise and `~0 %` is the predicted figure. Worth a follow-up measurement
-to confirm.
+⁵ Mode 2a's measured p50 at intra-AZ is ~90 µs **below** the Mode 0
+baseline; reported as `~0 %` rather than a negative overhead. This is
+within p50 measurement noise at 500 iterations, and is plausible given
+that simple `Q` (Mode 2a) sends marginally fewer bytes than
+extended-protocol `Bind`+`Execute`+`Sync` (Mode 0) even after the
+SET LOCAL prefix.
 
 Mode 4 requires a patched pgx (see [pgx_patches](#pgx_patches)) and a
 patched postgres ([PR #3](https://github.com/ringerc/postgres/pull/3)).
@@ -225,6 +230,30 @@ state follows.
   round trip**. Extra wire bytes and/or extra server-side processing
   bundled into a round trip that would have happened anyway. Cost
   scales with bandwidth and server CPU, not RTT.
+
+<a id="mode-0"></a>
+### Mode 0: untraced baseline (no propagation)
+
+The reference point against which the other modes are measured. The
+workload SQL goes through pgx's normal extended-protocol path —
+`Bind`+`Execute`+`Sync` against a cached prepared statement — with
+nothing attached to identify the trace context to the server. One
+round trip, statement cache hits, no wrapping transaction.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as Client
+    participant S as Postgres
+    rect rgb(220,255,220)
+    C->>S: Bind+Execute+Sync (cached SQL, $1=id)
+    S-->>C: BindComplete, rows, CommandComplete, ReadyForQuery
+    end
+```
+
+**1 RTT.** Every block is green: nothing here is overhead, because
+there is no tracing. The other modes' overhead is measured against
+this.
 
 <a id="mode-1a"></a>
 ### Mode 1a: `BEGIN`; `SET LOCAL`; SQL; `COMMIT` (sequential)

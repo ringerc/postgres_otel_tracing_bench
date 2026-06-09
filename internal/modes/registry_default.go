@@ -7,6 +7,7 @@ package modes
 // builtinModes in registry_patched.go for the build-tagged variant.
 func builtinModes() []Mode {
 	return []Mode{
+		&mode0{},
 		&mode1a{},
 		&mode1b{},
 		&mode2a{},

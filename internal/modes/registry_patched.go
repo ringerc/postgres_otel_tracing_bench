@@ -7,6 +7,7 @@ package modes
 // Mode 4 ('M' RequestHeaders message) joins the set.
 func builtinModes() []Mode {
 	return []Mode{
+		&mode0{},
 		&mode1a{},
 		&mode1b{},
 		&mode2a{},
