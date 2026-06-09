@@ -28,6 +28,45 @@ symmetric upstream + downstream toxics so a per-iteration RTT in the
 
 [otel-ext]: https://github.com/ringerc/postgres/tree/postgres-otel-tracing/contrib/otel
 
+## Synopsis
+
+The `'M'` (RequestHeaders) protocol message proposed in
+[postgres PR #3][pr3] gives PostgreSQL a low-overhead, side-effect-free
+channel for per-query trace-context propagation. The benchmark in this
+repo measures its overhead at **+0.5 % at WAN latency** and **+5 % at
+intra-AZ**, within the noise floor of an untraced cache-hit
+`Bind`+`Execute`+`Sync`. Every alternative approach measured here
+(sequential `SET LOCAL`, session `SET`/`RESET`, multi-statement
+simple `Q`, `pgx.Batch` wrapping transactions, sqlcommenter comments)
+imposes between **+100 %** and **+300 %** overhead over the same
+baseline, and brings at least one structural side effect:
+
+- **More round trips.** Modes 1a, 1b force 3–4 sequential RTTs.
+  Modes 2b and 3 advertise one RTT but pay a hidden second one
+  whenever the trace context varies per call (it always does), because
+  the varying text defeats pgx's automatic statement cache.
+- **Breaks prepared statements / statement caching.** Mode 2a forces
+  the simple query protocol, losing both `Parse`/`Bind`/`Execute` and
+  `PREPARE`/`EXECUTE`. Mode 3 (sqlcommenter) makes every cache key
+  unique, so the LRU churns ([jackc/pgx#1935][pgx1935]).
+- **Requires intrusive application changes.** Mode 2b replaces each
+  standalone query with a four-statement `pgx.Batch`; existing
+  `conn.Query` / `conn.QueryRow` / ORM call sites have to be
+  rewritten, and error handling becomes "walk the batch results in
+  queue order".
+
+The `'M'` message avoids all three. And because the trace context
+lives in a separate wire frame instead of in the SQL text, transaction
+state, or call structure, **middleware can inject it transparently** —
+a driver-level shim (`otelpgx` registered as `ConnConfig.Tracer`, a
+`database/sql` wrapper, an APM agent) can attach trace context to
+every Query/Exec without the application code being modified. None of
+the existing approaches has that property. See
+[Mode 4](#mode-4) for the wire-level shape and
+[the cost table](#what-it-measures) for the numbers.
+
+[pgx1935]: https://github.com/jackc/pgx/issues/1935
+
 ### Related work
 
 This harness builds on a `contrib/otel` postgres extension that ships
@@ -123,45 +162,6 @@ tag: without it, only the upstream `jackc/pgx` solid edge is active
 and Mode 4 is unregistered; with it, the dotted `pgx_patches` edge
 activates via the `go.mod replace` directive and Mode 4 joins the
 registry.
-
-## Synopsis
-
-The `'M'` (RequestHeaders) protocol message proposed in
-[postgres PR #3][pr3] gives PostgreSQL a low-overhead, side-effect-free
-channel for per-query trace-context propagation. The benchmark in this
-repo measures its overhead at **+0.5 % at WAN latency** and **+5 % at
-intra-AZ**, within the noise floor of an untraced cache-hit
-`Bind`+`Execute`+`Sync`. Every alternative approach measured here
-(sequential `SET LOCAL`, session `SET`/`RESET`, multi-statement
-simple `Q`, `pgx.Batch` wrapping transactions, sqlcommenter comments)
-imposes between **+100 %** and **+300 %** overhead over the same
-baseline, and brings at least one structural side effect:
-
-- **More round trips.** Modes 1a, 1b force 3–4 sequential RTTs.
-  Modes 2b and 3 advertise one RTT but pay a hidden second one
-  whenever the trace context varies per call (it always does), because
-  the varying text defeats pgx's automatic statement cache.
-- **Breaks prepared statements / statement caching.** Mode 2a forces
-  the simple query protocol, losing both `Parse`/`Bind`/`Execute` and
-  `PREPARE`/`EXECUTE`. Mode 3 (sqlcommenter) makes every cache key
-  unique, so the LRU churns ([jackc/pgx#1935][pgx1935]).
-- **Requires intrusive application changes.** Mode 2b replaces each
-  standalone query with a four-statement `pgx.Batch`; existing
-  `conn.Query` / `conn.QueryRow` / ORM call sites have to be
-  rewritten, and error handling becomes "walk the batch results in
-  queue order".
-
-The `'M'` message avoids all three. And because the trace context
-lives in a separate wire frame instead of in the SQL text, transaction
-state, or call structure, **middleware can inject it transparently** —
-a driver-level shim (`otelpgx` registered as `ConnConfig.Tracer`, a
-`database/sql` wrapper, an APM agent) can attach trace context to
-every Query/Exec without the application code being modified. None of
-the existing approaches has that property. See
-[Mode 4](#mode-4) for the wire-level shape and
-[the cost table](#what-it-measures) for the numbers.
-
-[pgx1935]: https://github.com/jackc/pgx/issues/1935
 
 ## What it measures
 
