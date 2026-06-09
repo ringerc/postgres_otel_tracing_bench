@@ -91,17 +91,17 @@ flowchart TB
 
     %% pgx side
     pgx --> pgxbranch
-    pr3 -. wire-format<br/>agreement .-> pgxbranch
+    pr3 -. "wire-format agreement" .-> pgxbranch
 
     %% Out-of-tree consumers
-    pr1 -. pg_config<br/>+ otel.h .-> demo
+    pr1 -. "pg_config + otel.h" .-> demo
     pgbranch --> deploy
     demo --> deploy
 
     %% Bench dependencies
     pgx -- "default build" --> bench
-    pgxbranch -. "go.mod replace<br/>-tags=patched_pgx" .-> bench
-    deploy -. "runtime target<br/>(DSN + Jaeger UI)" .-> bench
+    pgxbranch -. "go.mod replace (-tags=patched_pgx)" .-> bench
+    deploy -. "runtime target" .-> bench
 
     classDef upstream fill:#eef,stroke:#447,stroke-width:1px
     classDef ours fill:#efe,stroke:#474,stroke-width:1px
