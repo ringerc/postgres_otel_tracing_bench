@@ -1,5 +1,11 @@
 # postgres_otel_tracing_bench
 
+> [!NOTE]
+> This test tool was prepared with significant LLM assistance. Review
+> the code, the wire-protocol claims, and the numbers critically before
+> citing them; the empirical results have been spot-checked but the
+> harness has not been audited line-by-line by a human.
+
 Benchmark and demo harness for comparing trace-context propagation methods
 against PostgreSQL with [`contrib/otel`][otel-ext].
 
