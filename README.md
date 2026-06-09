@@ -75,15 +75,15 @@ of attaching a W3C trace context to a SQL workload. See
       <th rowspan="3">Wire shape</th>
       <th rowspan="3">RTTs</th>
       <th rowspan="3">Statement cache</th>
-      <th colspan="6">tracing overhead and %</th>
+      <th colspan="4">tracing cost vs <a href="#mode-0">Mode 0</a> baseline³</th>
     </tr>
     <tr>
-      <th colspan="3">intra-AZ¹</th>
-      <th colspan="3">WAN²</th>
+      <th colspan="2">intra-AZ¹</th>
+      <th colspan="2">WAN²</th>
     </tr>
     <tr>
-      <th>untraced³</th><th>traced</th><th>%</th>
-      <th>untraced³</th><th>traced</th><th>%</th>
+      <th>time</th><th>%</th>
+      <th>time</th><th>%</th>
     </tr>
   </thead>
   <tbody>
@@ -92,56 +92,56 @@ of attaching a W3C trace context to a SQL workload. See
       <td>Untraced baseline — workload SQL only</td>
       <td>1</td>
       <td>hits</td>
-      <td>2.6 ms</td><td>2.6 ms</td><td>—</td>
-      <td>30.2 ms</td><td>30.2 ms</td><td>—</td>
+      <td>2.6 ms</td><td>—</td>
+      <td>30.2 ms</td><td>—</td>
     </tr>
     <tr>
       <td><a href="#mode-1a">1a</a></td>
       <td><code>BEGIN; SET LOCAL ...; &lt;SQL&gt;; COMMIT;</code> (sequential)</td>
       <td>4</td>
       <td>hits</td>
-      <td>2.6 ms</td><td>10.4 ms</td><td><b>+300 %</b></td>
-      <td>30.2 ms</td><td>121 ms</td><td><b>+300 %</b></td>
+      <td>10.4 ms</td><td><b>+300 %</b></td>
+      <td>121 ms</td><td><b>+300 %</b></td>
     </tr>
     <tr>
       <td><a href="#mode-1b">1b</a></td>
       <td><code>SET ...; &lt;SQL&gt;; RESET ...;</code> (sequential)</td>
       <td>3</td>
       <td>hits</td>
-      <td>2.6 ms</td><td>7.6 ms</td><td><b>+190 %</b></td>
-      <td>30.2 ms</td><td>91 ms</td><td><b>+200 %</b></td>
+      <td>7.6 ms</td><td><b>+190 %</b></td>
+      <td>91 ms</td><td><b>+200 %</b></td>
     </tr>
     <tr>
       <td><a href="#mode-2a">2a</a></td>
       <td><code>SET LOCAL ...; &lt;SQL&gt;;</code> as multi-statement simple <code>Q</code></td>
       <td>1</td>
       <td><b>misses</b> (simple protocol)</td>
-      <td>2.6 ms</td><td>2.5 ms</td><td><b>~0 %</b>⁵</td>
-      <td>30.2 ms</td><td>30.5 ms</td><td><b>+1 %</b></td>
+      <td>2.5 ms</td><td><b>~0 %</b>⁵</td>
+      <td>30.5 ms</td><td><b>+1 %</b></td>
     </tr>
     <tr>
       <td><a href="#mode-2b">2b</a></td>
       <td><code>pgx.Batch</code> with <code>BEGIN/SET LOCAL/&lt;SQL&gt;/COMMIT</code> under one Sync</td>
       <td>2⁴</td>
       <td>hits</td>
-      <td>2.6 ms</td><td>5.2 ms</td><td><b>+100 %</b></td>
-      <td>30.2 ms</td><td>60.5 ms</td><td><b>+100 %</b></td>
+      <td>5.2 ms</td><td><b>+100 %</b></td>
+      <td>60.5 ms</td><td><b>+100 %</b></td>
     </tr>
     <tr>
       <td><a href="#mode-3">3</a></td>
       <td>sqlcommenter SQL-comment prepend</td>
       <td>2⁴</td>
       <td><b>misses every iteration</b> (SQL text changes)</td>
-      <td>2.6 ms</td><td>5.4 ms</td><td><b>+110 %</b></td>
-      <td>30.2 ms</td><td>61 ms</td><td><b>+100 %</b></td>
+      <td>5.4 ms</td><td><b>+110 %</b></td>
+      <td>61 ms</td><td><b>+100 %</b></td>
     </tr>
     <tr>
       <td><a href="#mode-4">4</a></td>
       <td><code>M</code> (RequestHeaders) frontend message</td>
       <td>1</td>
       <td>hits</td>
-      <td>2.6 ms</td><td>2.7 ms</td><td><b>+5 %</b></td>
-      <td>30.2 ms</td><td>30.3 ms</td><td><b>+0.5 %</b></td>
+      <td>2.7 ms</td><td><b>+5 %</b></td>
+      <td>30.3 ms</td><td><b>+0.5 %</b></td>
     </tr>
   </tbody>
 </table>
@@ -153,11 +153,12 @@ of attaching a W3C trace context to a SQL workload. See
 `crossregion` toxiproxy preset (15 ms one-way, ~30 ms RTT). See also
 [`docs/results/2026-06-09-crossregion-single.md`](docs/results/2026-06-09-crossregion-single.md).
 
-³ Untraced baselines (the `untraced` column) come from
-[Mode 0](#mode-0), which is the harness's explicit "no-propagation"
-baseline — pgx's normal cache-hit `Bind`+`Execute`+`Sync` issuing the
-same workload SQL with no trace context attached. The Mode 0 row's
-`%` column shows `—` because the comparison is against itself.
+³ The `%` column for every traced row is computed against
+[Mode 0](#mode-0)'s `time` cell at the same preset. Mode 0 is the
+harness's explicit "no-propagation" baseline — pgx's normal cache-hit
+`Bind`+`Execute`+`Sync` issuing the same workload SQL with no trace
+context attached. Mode 0's own `%` cell shows `—` because the
+comparison would be against itself.
 
 ⁴ Modes 2b and 3 would be 1 RTT if the SET LOCAL value (2b) or the
 sqlcommenter SQL comment (3) didn't vary every iteration — but they do,
