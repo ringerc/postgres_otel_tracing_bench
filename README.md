@@ -9,13 +9,14 @@
 > harness has not been audited line-by-line by a human.
 
 Benchmark and demo harness for comparing trace-context propagation methods
-against PostgreSQL with [`contrib/otel`][otel-ext].
+against PostgreSQL with [`otel_api`][otel-ext] (the extension distributed
+out-of-tree, formerly `contrib/otel` in the patched postgres branch).
 
-This tool is a consumer of the `contrib/otel` extension's public API. It
+This tool is a consumer of the `otel_api` extension's public API. It
 exercises that API end-to-end: connecting via pgx, attaching a W3C
 trace context to each query through every supported propagation channel
 (SET LOCAL, sqlcommenter, the `'M'` RequestHeaders frame), and verifying
-that contrib/otel picks the context up, emits server-side spans, and
+that `otel_api` picks the context up, emits server-side spans, and
 links them under the same `trace_id` as the client-side spans.
 
 To make the protocol-shape delta visible at human-readable percentile
@@ -26,7 +27,7 @@ numbers rather than µs-level loopback noise, the harness injects
 symmetric upstream + downstream toxics so a per-iteration RTT in the
 1 ms – 100 ms range is what the benchmark is actually measuring against.
 
-[otel-ext]: https://github.com/ringerc/postgres/tree/postgres-otel-tracing/contrib/otel
+[otel-ext]: https://github.com/ringerc/postgres_otel_api
 
 ## Synopsis
 
@@ -69,32 +70,36 @@ the existing approaches has that property. See
 
 ### Related work
 
-This harness builds on a `contrib/otel` postgres extension that ships
-the trace-context plumbing and extension API, plus a set of optional
-postgres and client-driver patches that unlock additional propagation
-channels (most importantly the `'M'` RequestHeaders frame for Mode 4).
-A sibling demo extension consumes contrib/otel's span-emit hook and
+This harness builds on the [`otel_api`][otelapi] PostgreSQL extension
+that ships the trace-context plumbing and extension API (distributed
+standalone via PGXS), plus a set of optional postgres and
+client-driver patches that unlock additional propagation channels
+(most importantly the `'M'` RequestHeaders frame for Mode 4). A
+sibling demo extension consumes `otel_api`'s span-emit hook and
 ships spans to an OTel collector. The pieces:
 
 | Component | Where | What |
 |---|---|---|
-| `contrib/otel` extension | [postgres PR #1][pr1] | The trace-context plumbing + span data model + extension API that this harness exercises. |
-| `core: protocol headers` (`'M'`) | [postgres PR #3][pr3] | Adds the `'M'` (RequestHeaders) frontend message and `_pq_.headers=1` negotiation. Required for Mode 4. |
-| `core: pre_ready_for_query_hook` | [postgres PR #4][pr4] | Statement-scope hook used by future `contrib/otel` features; not currently exercised by this harness. |
+| `otel_api` + siblings | [`ringerc/postgres_otel_api`][otelapi] | The standalone PGXS extensions: `otel_api` (the API), `otel_postgres_tracing` (query instrumentation), `otel_demo_exporter` (file exporter), `otel_test_exporter` (test-only). Builds against any installed PostgreSQL 14+; auto-detects optional core patches and adapts. |
+| `core: protocol headers` (`'M'`) | [postgres PR #3][pr3] | Adds the `'M'` (RequestHeaders) frontend message and `_pq_.headers=1` negotiation, plus a libpq client-side. Required for Mode 4. |
+| `core: pre_ready_for_query_hook` | [postgres PR #4][pr4] | Statement-scope hook used by future `otel_api` features; not currently exercised by this harness. |
 | `core: elog annotations` | [postgres PR #5][pr5] | Generic key/value annotations on `ErrorData` so trace context surfaces in JSON/CSV log output via `%A` / `%{key}A`. Not exercised by benchmark numbers but visible in trace correlation. |
-| `postgres_otel_tracing_demo` | [demo extension][demo] | A postgres extension (Rust-built `cdylib`, loaded via `shared_preload_libraries`) that consumes contrib/otel's span-emit hook and ships spans via the real `opentelemetry-rust` SDK. The collector this benchmark talks to typically receives spans from both this harness (client side, via `otelpgx`) and the demo extension (server side, via contrib/otel). |
+| `ringerc/postgres@postgres-otel-tracing` | [branch][pg-branch] | The integration branch: octopus merge of PRs #3+#4+#5 plus a `git subtree` of `postgres_otel_api` under `contrib/` and `src/test/modules/`. Used as the postgres source the deploy image builds from. |
+| `postgres_otel_tracing_demo` | [demo extension][demo] | A postgres extension (Rust-built `cdylib`, loaded via `shared_preload_libraries`) that consumes `otel_api`'s span-emit hook and ships spans via the real `opentelemetry-rust` SDK. The collector this benchmark talks to typically receives spans from both this harness (client side, via `otelpgx`) and the demo extension (server side, via `otel_api`). |
 | **`postgres_otel_tracing_bench`** | this repo | The Go harness — what you're reading. |
 
-[pr1]: https://github.com/ringerc/postgres/pull/1
+[otelapi]: https://github.com/ringerc/postgres_otel_api
 [pr3]: https://github.com/ringerc/postgres/pull/3
 [pr4]: https://github.com/ringerc/postgres/pull/4
 [pr5]: https://github.com/ringerc/postgres/pull/5
+[pg-branch]: https://github.com/ringerc/postgres/tree/postgres-otel-tracing
 [demo]: https://github.com/ringerc/postgres_otel_tracing_demo
 
-The three unpatched-pgx modes (1a, 1b, 2a, 2b, 3) work against stock
-PostgreSQL with just PR #1 (`contrib/otel`) installed. Mode 4 additionally
-requires PR #3 server-side and the [`ringerc/pgx_patches`][pgxp] fork on
-the client.
+The unpatched-pgx modes (1a, 1b, 2a, 2b, 3) work against stock
+PostgreSQL with just `postgres_otel_api` installed. Mode 4 additionally
+requires PR #3 server-side (which also includes the libpq client-side
+change) and the [`ringerc/pgx_patches`][pgxp] fork for the pgx client
+in this repo.
 
 [pgxp]: https://github.com/ringerc/pgx_patches
 
@@ -105,12 +110,13 @@ flowchart TB
     pg([postgres/postgres<br/>master])
     pgx([jackc/pgx<br/>v5.10.0])
 
-    pr1["PR #1<br/>contrib/otel +<br/>contrib/otel_postgres_tracing"]
     pr3["PR #3<br/>core protocol headers<br/>('M' message + libpq)"]
     pr4["PR #4<br/>core pre_ready_for_query_hook"]
     pr5["PR #5<br/>core elog annotations"]
 
-    pgbranch["ringerc/postgres<br/>branch postgres-otel-tracing<br/>= merge of #1 + #3 + #4 + #5"]
+    otelapi["ringerc/postgres_otel_api<br/>otel_api + otel_postgres_tracing<br/>+ otel_demo_exporter (+ otel_test_exporter)<br/>standalone PGXS extensions, version 0.1.1"]
+
+    pgbranch["ringerc/postgres<br/>branch postgres-otel-tracing<br/>octopus merge of #3+#4+#5<br/>+ git-subtree of postgres_otel_api"]
 
     pgxbranch["ringerc/pgx_patches<br/>branch m-protocol-headers<br/>adds pgproto3.RequestHeaders"]
 
@@ -118,22 +124,26 @@ flowchart TB
     deploy["deploy/ docker-compose<br/>bundles patched postgres + demo<br/>+ toxiproxy + collector + Jaeger"]
     bench[["ringerc/postgres_otel_tracing_bench<br/>(this repo --- the Go harness)"]]
 
-    %% Postgres side
-    pg --> pr1
+    %% Postgres-core side: three patch branches off upstream feed the
+    %% ringerc/postgres@postgres-otel-tracing branch via octopus merge.
     pg --> pr3
     pg --> pr4
     pg --> pr5
-    pr1 --> pgbranch
     pr3 --> pgbranch
     pr4 --> pgbranch
     pr5 --> pgbranch
+
+    %% Extensions side: postgres_otel_api is a standalone repo built
+    %% PGXS-style against any installed postgres. Subtree-merged into
+    %% the patched postgres tree under contrib/* + src/test/modules/.
+    otelapi -- "git subtree --squash<br/>(contrib/otel_api,<br/>contrib/otel_postgres_tracing,<br/>contrib/otel_demo_exporter,<br/>src/test/modules/otel_test_exporter)" --> pgbranch
 
     %% pgx side
     pgx --> pgxbranch
     pr3 -. "wire-format agreement" .-> pgxbranch
 
     %% Out-of-tree consumers
-    pr1 -. "pg_config + otel.h" .-> demo
+    otelapi -. "pg_config + <otel_api/otel.h>" .-> demo
     pgbranch --> deploy
     demo --> deploy
 
@@ -146,16 +156,27 @@ flowchart TB
     classDef ours fill:#efe,stroke:#474,stroke-width:1px
     classDef thisrepo fill:#ffe,stroke:#774,stroke-width:2px
     class pg,pgx upstream
-    class pr1,pr3,pr4,pr5,pgbranch,pgxbranch,demo,deploy ours
+    class pr3,pr4,pr5,otelapi,pgbranch,pgxbranch,demo,deploy ours
     class bench thisrepo
 ```
 
 **Reading the graph.** Blue nodes are upstream; green nodes are work in
 the ringerc repos; yellow is this repo. Solid arrows are "is built
-from" relationships. Dotted arrows are dependency or interface
-agreements (the wire format that PR #3 and `pgx_patches` must agree
-on; the headers contrib/otel exposes that the demo extension consumes;
-the runtime targets the bench expects to talk to).
+from" relationships (octopus merge for the core PRs; `git subtree
+--squash` for the extensions). Dotted arrows are dependency or
+interface agreements (the wire format that PR #3 and `pgx_patches`
+must agree on; the headers `otel_api` exposes that the demo extension
+consumes; the runtime targets the bench expects to talk to).
+
+The `postgres-otel-tracing` branch's working tree has zero
+authoritative source for the four extensions anymore — `contrib/otel_api/*`,
+`contrib/otel_postgres_tracing/*`, `contrib/otel_demo_exporter/*`,
+and `src/test/modules/otel_test_exporter/*` are all carried in from
+`postgres_otel_api` via subtree. The branch itself contains only the
+three core-PR commits + four subtree-merge commits + a small amount
+of integration glue (registering the new directories in
+`contrib/Makefile`, `contrib/meson.build`,
+`src/test/modules/Makefile`, `src/test/modules/meson.build`).
 
 The bench has two build modes determined by the `patched_pgx` build
 tag: without it, only the upstream `jackc/pgx` solid edge is active
@@ -307,10 +328,11 @@ This isn't a `pgbench` replacement. The workload is intentionally trivial
 (one parameterized SELECT or N parameterized SELECTs in a batch) so the
 protocol-shape delta isn't drowned by query execution cost. It's also
 not a correctness or compatibility test for trace propagation — it
-assumes contrib/otel works. contrib/otel ships its own test coverage
-(the TAP suites under `contrib/otel/t/` and `contrib/otel_postgres_tracing/t/`
-in [PR #1][pr1], plus the test_protocol_headers module in [PR #3][pr3]);
-this harness measures performance, not correctness.
+assumes `otel_api` works. It ships its own test coverage (the TAP
+suites under each extension's `t/` directory in
+[`ringerc/postgres_otel_api`][otelapi], plus the
+`test_protocol_headers` module in [PR #3][pr3]); this harness
+measures performance, not correctness.
 
 ## CLI
 
@@ -323,17 +345,17 @@ otelbench check
 
 ## Requirements
 
-- postgres with `contrib/otel` loaded and `pg_stat_statements` in
-  `shared_preload_libraries`; for Mode 4, also with
-  [PR #3](https://github.com/ringerc/postgres/pull/3) applied.
+- postgres with [`otel_api` + `otel_postgres_tracing`][otelapi] loaded
+  and `pg_stat_statements` in `shared_preload_libraries`; for Mode 4,
+  also with [PR #3](https://github.com/ringerc/postgres/pull/3) applied.
 - [toxiproxy](https://github.com/Shopify/toxiproxy) in front of postgres
   for latency injection.
 - An OTLP collector for client-side spans (Jaeger / Tempo / Grafana
   Agent).
 
 A [`deploy/`](deploy/) directory ships a `docker-compose.yml` that
-brings up patched postgres (with `contrib/otel` +
-`contrib/otel_postgres_tracing` + the
+brings up patched postgres (with `otel_api` + `otel_postgres_tracing`
++ the
 [`postgres_otel_tracing_demo`](https://github.com/ringerc/postgres_otel_tracing_demo)
 Rust extension loaded), toxiproxy, an OTel collector, and Jaeger.
 First-time build is slow (~15–20 min for the patched-postgres image)
