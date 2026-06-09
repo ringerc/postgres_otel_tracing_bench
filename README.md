@@ -30,7 +30,7 @@ symmetric upstream + downstream toxics so a per-iteration RTT in the
 
 ## Synopsis
 
-The `'M'` (RequestHeaders) protocol message proposed in
+The [`'M'` (RequestHeaders) protocol message](#mode-4) proposed in
 [postgres PR #3][pr3] gives PostgreSQL a low-overhead, side-effect-free
 channel for per-query trace-context propagation. The benchmark in this
 repo measures its overhead at **+0.5 % at WAN latency** and **+5 % at
