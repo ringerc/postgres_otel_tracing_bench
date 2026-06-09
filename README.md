@@ -1,16 +1,52 @@
 # postgres_otel_tracing_bench
 
 Benchmark and demo harness for comparing trace-context propagation methods
-against PostgreSQL with [`contrib/otel`](https://github.com/ringerc/postgres/tree/postgres-otel-tracing/contrib/otel).
+against PostgreSQL with [`contrib/otel`][otel-ext].
 
-Status: scaffolding. CLI surface defined, mode skeletons in place, no
-mode currently runs end-to-end.
+This tool is a consumer of the `contrib/otel` extension's public API. It
+exercises that API end-to-end: connecting via pgx, attaching a W3C
+trace context to each query through every supported propagation channel
+(SET LOCAL, sqlcommenter, the `'M'` RequestHeaders frame), and verifying
+that contrib/otel picks the context up, emits server-side spans, and
+links them under the same `trace_id` as the client-side spans.
+
+[otel-ext]: https://github.com/ringerc/postgres/tree/postgres-otel-tracing/contrib/otel
+
+### Related work
+
+This repo sits inside a four-PR series against `ringerc/postgres` plus a
+sibling demo crate that show the end-to-end picture:
+
+| Component | Where | What |
+|---|---|---|
+| `contrib/otel` extension | [postgres PR #1][pr1] | The trace-context plumbing + span data model + extension API that this harness exercises. |
+| `core: protocol headers` (`'M'`) | [postgres PR #3][pr3] | Adds the `'M'` (RequestHeaders) frontend message and `_pq_.headers=1` negotiation. Required for Mode 4. |
+| `core: pre_ready_for_query_hook` | [postgres PR #4][pr4] | Statement-scope hook used by future `contrib/otel` features; not currently exercised by this harness. |
+| `core: elog annotations` | [postgres PR #5][pr5] | Generic key/value annotations on `ErrorData` so trace context surfaces in JSON/CSV log output via `%A` / `%{key}A`. Not exercised by benchmark numbers but visible in trace correlation. |
+| `postgres_otel_tracing_demo` | [demo crate][demo] | A real-`opentelemetry-rust` SDK consumer of contrib/otel's span-emit hook. The collector this benchmark talks to typically receives spans from both this harness (client side, via otelpgx) and the demo crate (server side, via contrib/otel). |
+| **`postgres_otel_tracing_bench`** | this repo | The Go harness — what you're reading. |
+
+[pr1]: https://github.com/ringerc/postgres/pull/1
+[pr3]: https://github.com/ringerc/postgres/pull/3
+[pr4]: https://github.com/ringerc/postgres/pull/4
+[pr5]: https://github.com/ringerc/postgres/pull/5
+[demo]: https://github.com/ringerc/postgres_otel_tracing_demo
+
+The three unpatched-pgx modes (1a, 1b, 2a, 2b, 3) work against stock
+PostgreSQL with just PR #1 (`contrib/otel`) installed. Mode 4 additionally
+requires PR #3 server-side and the [`ringerc/pgx_patches`][pgxp] fork on
+the client.
+
+[pgxp]: https://github.com/ringerc/pgx_patches
 
 ## What it measures
 
 Per-iteration latency, wire-byte counts, and postgres-side
 `pg_stat_statements` / `pg_prepared_statements` deltas for six methods
-of attaching a W3C trace context to a SQL workload:
+of attaching a W3C trace context to a SQL workload. See
+[docs/results/](docs/results/) for canned reports; the headline at
+`crossregion` (~30 ms RTT) is in
+[`2026-06-09-crossregion-single.md`](docs/results/2026-06-09-crossregion-single.md).
 
 | Mode | Wire shape | RTTs | Statement cache |
 |------|------------|------|-----------------|
