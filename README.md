@@ -91,8 +91,10 @@ otelbench check
 - An OTLP collector for client-side spans (Jaeger / Tempo / Grafana
   Agent).
 
-The published demo target ships a `docker-compose.yml` that wires all
-three up; see the [Running](#running) section.
+**Planned (not yet implemented):** a `docker-compose.yml` that wires up
+patched postgres + contrib/otel + toxiproxy + an OTLP collector + Jaeger
+will live under `deploy/`. Today the bench is run against locally-started
+processes; see the [Running](#running) section.
 
 ## Modes — protocol-level rationale
 
@@ -173,13 +175,10 @@ go build ./cmd/otelbench
 ./otelbench bench --modes 1a --iterations 1000 --latency intradc
 ```
 
-Docker compose (see `deploy/docker-compose.yml`):
-
-```
-docker compose -f deploy/docker-compose.yml up -d
-docker compose -f deploy/docker-compose.yml run otelbench bench \
-    --modes all --sweep-latency --iterations 5000
-```
+Docker compose: **not yet implemented.** A planned `deploy/docker-compose.yml`
+will wire up patched postgres + contrib/otel + toxiproxy + an OTLP
+collector + Jaeger so the published demo runs in one `docker compose up`.
+Tracked as a future task; for now, start each piece by hand.
 
 ## License
 
