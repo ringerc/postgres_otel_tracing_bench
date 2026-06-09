@@ -109,6 +109,14 @@ ENV LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8
 
 RUN groupadd -r postgres && useradd -r -g postgres -d /var/lib/postgresql -m postgres
 
+# Pre-create the data directory and own it correctly so docker's named-
+# volume mount inherits the postgres ownership on first start. Without
+# this, docker creates the bind point as root and initdb fails with
+# permission denied.
+RUN mkdir -p /var/lib/postgresql/data \
+    && chown -R postgres:postgres /var/lib/postgresql \
+    && chmod 0700 /var/lib/postgresql/data
+
 COPY --from=pg-builder   /opt/pgsql /opt/pgsql
 COPY --from=demo-builder /opt/pgsql/lib/postgresql/postgres_otel_tracing_demo.so \
                          /opt/pgsql/lib/postgresql/postgres_otel_tracing_demo.so

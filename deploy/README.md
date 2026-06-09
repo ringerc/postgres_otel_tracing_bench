@@ -43,10 +43,28 @@ author. First-time `docker compose up --build` is expected to take
 
 ```bash
 cd deploy
-docker compose up --build       # first time
-docker compose up -d            # subsequent
+docker compose up --build       # first time (15-20 min cold; mostly postgres-from-source + rust)
+docker compose up -d            # subsequent (already-built images)
 docker compose logs -f postgres # tail postgres logs (includes init.sh + contrib/otel)
 ```
+
+## Verify it works
+
+```bash
+./deploy/smoke.sh                          # patched build (default --- includes Mode 4)
+PATCHED=0 ./deploy/smoke.sh                # unpatched build (modes 0,1a,1b,2a,2b,3 only)
+```
+
+The smoke script waits for postgres-via-toxiproxy, builds the bench
+from this repo, runs a 50-iter cell across every mode at the `intradc`
+preset, then polls Jaeger's HTTP API to confirm both `postgres` (server-
+side spans from the demo extension) and `otelbench` (client-side
+spans from this harness) show up as known services. Exit code is
+non-zero on any failure with a clear message about which step broke.
+
+If it passes, open <http://localhost:16686> and search for traces —
+you should see `bench.iteration` client spans with postgres-side
+children sharing the same `trace_id`.
 
 ## Use it
 
